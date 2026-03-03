@@ -2327,6 +2327,10 @@ class HavenApp {
       this._snapshotAdminSettings();
       document.getElementById('settings-modal').style.display = 'flex';
       this._syncSettingsNav();
+      // Show desktop-only sections when running inside Haven Desktop
+      if (window.havenDesktop?.isDesktopApp) {
+        document.getElementById('desktop-shortcuts-nav')?.style.removeProperty('display');
+      }
       // Eagerly fetch data that requires async calls so sections don't
       // sit on "Loading..." indefinitely if the user never clicks the nav item.
       loadTotpStatus();
@@ -2472,6 +2476,7 @@ class HavenApp {
       settingsNav.addEventListener('click', (e) => {
         const item = e.target.closest('.settings-nav-item');
         if (item && item.dataset.target === 'section-2fa') loadTotpStatus();
+        if (item && item.dataset.target === 'section-desktop-shortcuts') this._setupDesktopShortcuts();
       });
     }
 
@@ -7999,14 +8004,22 @@ class HavenApp {
           if (msgContent.querySelector(`.link-preview[data-url="${CSS.escape(url)}"]`)) return;
 
           const card = document.createElement('a');
-          card.className = 'link-preview';
+          const hasGallery = Array.isArray(data.images) && data.images.length >= 2;
+          card.className = hasGallery ? 'link-preview link-preview--gallery' : 'link-preview';
           card.href = url;
           card.target = '_blank';
           card.rel = 'noopener noreferrer nofollow';
           card.dataset.url = url;
 
           let inner = '';
-          if (data.image) {
+          if (hasGallery) {
+            const count = Math.min(data.images.length, 4);
+            inner += `<div class="link-preview-gallery" data-count="${count}">`;
+            data.images.slice(0, 4).forEach(imgUrl => {
+              inner += `<img class="link-preview-gallery-img" src="${this._escapeHtml(imgUrl)}" alt="" loading="lazy">`;
+            });
+            inner += '</div>';
+          } else if (data.image) {
             inner += `<img class="link-preview-image" src="${this._escapeHtml(data.image)}" alt="" loading="lazy">`;
           }
           inner += '<div class="link-preview-text">';
@@ -16016,6 +16029,88 @@ class HavenApp {
       if (e.target === modal) {
         modal.style.display = 'none';
       }
+    });
+  }
+
+  async _setupDesktopShortcuts() {
+    if (!window.havenDesktop?.shortcuts) return;
+
+    const keyMap = {
+      ' ': 'Space', 'ArrowUp': 'Up', 'ArrowDown': 'Down',
+      'ArrowLeft': 'Left', 'ArrowRight': 'Right',
+      'Escape': 'Escape', 'Tab': 'Tab', 'Enter': 'Return',
+      'Backspace': 'Backspace', 'Delete': 'Delete',
+      'Home': 'Home', 'End': 'End', 'PageUp': 'PageUp', 'PageDown': 'PageDown',
+    };
+
+    const formatAccel = (accel) => {
+      if (!accel) return '—';
+      return accel.replace('CommandOrControl', 'Ctrl/Cmd').replace('Control', 'Ctrl');
+    };
+
+    let config = {};
+    try { config = await window.havenDesktop.shortcuts.getConfig(); } catch (e) {}
+
+    const actions = ['mute', 'deafen', 'ptt'];
+
+    actions.forEach(action => {
+      const keyEl     = document.getElementById(`shortcut-key-${action}`);
+      const recordBtn = document.querySelector(`.shortcut-record-btn[data-action="${action}"]`);
+      const clearBtn  = document.querySelector(`.shortcut-clear-btn[data-action="${action}"]`);
+      if (!keyEl || !recordBtn || !clearBtn) return;
+
+      keyEl.textContent = formatAccel(config[action] || '');
+
+      recordBtn.addEventListener('click', () => {
+        // Already recording — cancel
+        if (recordBtn.classList.contains('recording')) {
+          recordBtn.classList.remove('recording');
+          recordBtn.textContent = 'Record';
+          keyEl.classList.remove('recording-label');
+          return;
+        }
+        recordBtn.classList.add('recording');
+        recordBtn.textContent = 'Press key…';
+        keyEl.classList.add('recording-label');
+        keyEl.textContent = '…';
+
+        const onKeyDown = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // Ignore lone modifiers
+          if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
+
+          const parts = [];
+          if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl');
+          if (e.altKey)  parts.push('Alt');
+          if (e.shiftKey) parts.push('Shift');
+          const mapped = keyMap[e.key] || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+          parts.push(mapped);
+          const accel = parts.join('+');
+
+          document.removeEventListener('keydown', onKeyDown, true);
+          recordBtn.classList.remove('recording');
+          recordBtn.textContent = 'Record';
+          keyEl.classList.remove('recording-label');
+
+          try {
+            await window.havenDesktop.shortcuts.setConfig({ [action]: accel });
+            keyEl.textContent = formatAccel(accel);
+          } catch (err) {
+            keyEl.textContent = formatAccel(config[action] || '');
+            this._showToast?.('Failed to register shortcut — it may already be in use.', 'error');
+          }
+        };
+
+        document.addEventListener('keydown', onKeyDown, true);
+      });
+
+      clearBtn.addEventListener('click', async () => {
+        try {
+          await window.havenDesktop.shortcuts.setConfig({ [action]: '' });
+          keyEl.textContent = '—';
+        } catch (err) {}
+      });
     });
   }
 

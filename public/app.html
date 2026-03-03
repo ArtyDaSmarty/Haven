@@ -886,6 +886,7 @@
           <div class="settings-nav-item" data-target="section-2fa">🔐 Two-Factor</div>
           <div class="settings-nav-item" data-target="section-delete-account">⚠️ Account</div>
           <div class="settings-nav-item" data-target="section-plugins">🧩 Plugins & Themes</div>
+          <div class="settings-nav-item" data-target="section-desktop-shortcuts" id="desktop-shortcuts-nav" style="display:none">⌨️ Shortcuts</div>
           <div class="settings-nav-group settings-nav-admin" style="display:none">Admin</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-branding" style="display:none">🏠 Branding</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-members" style="display:none">👥 Members</div>
@@ -903,8 +904,38 @@
         </nav>
         <div class="settings-body">
 
-      <!-- Layout Density Section -->
-      <div class="settings-section" id="section-density">
+      <!-- Desktop Shortcuts Section (only shown in Haven Desktop) -->
+      <div class="settings-section" id="section-desktop-shortcuts" style="display:none">
+        <h5 class="settings-section-title">⌨️ Desktop Shortcuts</h5>
+        <p class="settings-desc">Global keyboard shortcuts — active even when Haven is in the background. Click a row to rebind, or &ldquo;Clear&rdquo; to disable.</p>
+        <div class="shortcut-table" id="shortcut-table">
+          <div class="shortcut-row" id="shortcut-row-mute">
+            <span class="shortcut-label">Mute / Unmute</span>
+            <span class="shortcut-key" id="shortcut-key-mute">—</span>
+            <div class="shortcut-btns">
+              <button class="btn-xs shortcut-record-btn" data-action="mute">Change</button>
+              <button class="btn-xs shortcut-clear-btn"  data-action="mute">Clear</button>
+            </div>
+          </div>
+          <div class="shortcut-row" id="shortcut-row-deafen">
+            <span class="shortcut-label">Deafen / Undeafen</span>
+            <span class="shortcut-key" id="shortcut-key-deafen">—</span>
+            <div class="shortcut-btns">
+              <button class="btn-xs shortcut-record-btn" data-action="deafen">Change</button>
+              <button class="btn-xs shortcut-clear-btn"  data-action="deafen">Clear</button>
+            </div>
+          </div>
+          <div class="shortcut-row" id="shortcut-row-ptt">
+            <span class="shortcut-label">Push-to-Talk <span class="muted-text" style="font-weight:400;font-size:0.85em">(toggle)</span></span>
+            <span class="shortcut-key" id="shortcut-key-ptt">Not set</span>
+            <div class="shortcut-btns">
+              <button class="btn-xs shortcut-record-btn" data-action="ptt">Change</button>
+              <button class="btn-xs shortcut-clear-btn"  data-action="ptt">Clear</button>
+            </div>
+          </div>
+        </div>
+        <p class="settings-hint" id="shortcut-status" style="margin-top:8px"></p>
+      </div>
         <h5 class="settings-section-title">📐 Layout Density</h5>
         <div class="density-picker" id="density-picker">
           <button type="button" class="density-btn" data-density="compact" title="Compact — tighter spacing, smaller avatars">

@@ -1292,12 +1292,26 @@ app.get('/api/link-preview', previewLimiter, async (req, res) => {
         return m ? m[1].trim() : null;
       };
 
+      // Returns ALL values for a given OG property (e.g. multiple og:image tags
+      // for tweet galleries or reddit image galleries). Deduped, max 4 results.
+      const getAllMetaContent = (property) => {
+        const seen = new Set();
+        const re1 = new RegExp(`<meta[^>]*?(?:property|name)=["']${property}["'][^>]*?content=["']([^"']+)["']`, 'gi');
+        const re2 = new RegExp(`<meta[^>]*?content=["']([^"']+)["'][^>]*?(?:property|name)=["']${property}["']`, 'gi');
+        let m;
+        while ((m = re1.exec(chunk)) !== null) seen.add(m[1].trim());
+        while ((m = re2.exec(chunk)) !== null) seen.add(m[1].trim());
+        return [...seen].slice(0, 4);
+      };
+
       const titleTag = chunk.match(/<title[^>]*>([^<]+)<\/title>/i);
 
+      const ogImages = getAllMetaContent('og:image');
       data = {
         title: getMetaContent('og:title') || getMetaContent('twitter:title') || (titleTag ? titleTag[1].trim() : null),
         description: getMetaContent('og:description') || getMetaContent('twitter:description') || getMetaContent('description'),
-        image: getMetaContent('og:image') || getMetaContent('twitter:image'),
+        image: ogImages[0] || getMetaContent('twitter:image'),
+        images: ogImages.length >= 2 ? ogImages : undefined,
         siteName: getMetaContent('og:site_name') || parsed.hostname,
         url: getMetaContent('og:url') || url
       };
