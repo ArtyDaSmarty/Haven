@@ -5,7 +5,7 @@ const fs     = require('fs');
 const bcrypt = require('bcryptjs');
 const webpush = require('web-push');
 const { sendFcm, isFcmEnabled } = require('./fcm');
-const { UPLOADS_DIR, DELETED_ATTACHMENTS_DIR } = require('./paths');
+const { DATA_DIR, UPLOADS_DIR, DELETED_ATTACHMENTS_DIR } = require('./paths');
 const HAVEN_VERSION = require('../package.json').version;
 
 // ── Normalize SQLite timestamps to UTC ISO 8601 ────────
@@ -4160,6 +4160,42 @@ function setupSocketHandlers(io, db) {
         `).run(socket.user.id, channel.id, data.messageId);
       } catch (err) {
         console.error('Mark read error:', err);
+      }
+    });
+
+    // ═══════════════ ANDROID BETA SIGNUP ═════════════════════
+
+    socket.on('android-beta-signup', (data, callback) => {
+      if (typeof callback !== 'function') return;
+      if (!data || !data.email || typeof data.email !== 'string') {
+        return callback({ ok: false, error: 'Invalid email.' });
+      }
+      const email = data.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) {
+        return callback({ ok: false, error: 'Invalid email address.' });
+      }
+
+      try {
+        const filePath = path.join(DATA_DIR, 'beta-signups.json');
+        let signups = [];
+        try { signups = JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { /* first signup */ }
+
+        // Prevent duplicates
+        if (signups.some(s => s.email === email)) {
+          return callback({ ok: true }); // silently accept duplicate
+        }
+
+        signups.push({
+          email,
+          username: socket.user.username,
+          date: new Date().toISOString()
+        });
+        fs.writeFileSync(filePath, JSON.stringify(signups, null, 2));
+        console.log(`📱 Android beta signup: ${email} (${socket.user.username})`);
+        callback({ ok: true });
+      } catch (err) {
+        console.error('Beta signup error:', err);
+        callback({ ok: false, error: 'Server error — try again later.' });
       }
     });
 

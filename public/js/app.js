@@ -16364,8 +16364,11 @@ class HavenApp {
    *  and a prefilled mailto: link sends the opt-in request to the developer. */
   _initAndroidBetaBanner() {
     // ── Top-bar banner ──
-    const bannerDismissed = localStorage.getItem('haven_android_beta_banner_dismissed');
-    if (!bannerDismissed) {
+    // Only permanently hidden if user checked "Don't show this again";
+    // the X button is session-only so it returns on next visit.
+    const permaDismissed = localStorage.getItem('haven_android_beta_banner_dismissed');
+    const sessionDismissed = sessionStorage.getItem('haven_android_beta_banner_session');
+    if (!permaDismissed && !sessionDismissed) {
       const banner = document.getElementById('android-beta-banner');
       if (banner) {
         banner.style.display = 'inline-flex';
@@ -16381,7 +16384,8 @@ class HavenApp {
             e.preventDefault();
             e.stopPropagation();
             banner.style.display = 'none';
-            localStorage.setItem('haven_android_beta_banner_dismissed', '1');
+            // Session-only: banner comes back on next page load
+            sessionStorage.setItem('haven_android_beta_banner_session', '1');
           });
         }
       }
@@ -16422,21 +16426,41 @@ class HavenApp {
           emailInput.focus();
           return;
         }
-        // Open mailto: link to send the opt-in request
-        const subject = encodeURIComponent('Haven Android Beta - Opt-in Request');
-        const body = encodeURIComponent(
-          `Hi Amnibro,\n\nI'd like to opt-in to the Haven Android closed beta on Google Play.\n\nMy email: ${email}\n\nThanks!`
-        );
-        window.open(`mailto:amnibro7@gmail.com?subject=${subject}&body=${body}`, '_blank');
 
-        // Show success toast
-        if (typeof this._showToast === 'function') {
-          this._showToast('Email client opened! Send the pre-filled message to complete your sign-up.', 'success');
+        // Disable button to prevent double-submit
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Sending…';
+
+        // Send through server socket — no mailto dependency
+        if (this.socket && this.socket.connected) {
+          this.socket.emit('android-beta-signup', { email }, (res) => {
+            if (res && res.ok) {
+              if (typeof this._showToast === 'function') {
+                this._showToast('Beta request sent! You\'ll be added to the Google Play closed beta soon.', 'success');
+              }
+              localStorage.setItem('haven_android_beta_promo_dismissed', '1');
+              modal.style.display = 'none';
+            } else {
+              if (typeof this._showToast === 'function') {
+                this._showToast(res?.error || 'Something went wrong — try again.', 'error');
+              }
+              submitBtn.disabled = false;
+              submitBtn.textContent = '🚀 Sign Up for Beta';
+            }
+          });
+        } else {
+          // Socket not connected — fall back to mailto as last resort
+          const subject = encodeURIComponent('Haven Android Beta - Opt-in Request');
+          const body = encodeURIComponent(
+            `Hi Amnibro,\n\nI'd like to opt-in to the Haven Android closed beta on Google Play.\n\nMy email: ${email}\n\nThanks!`
+          );
+          window.location.href = `mailto:amnibro7@gmail.com?subject=${subject}&body=${body}`;
+          if (typeof this._showToast === 'function') {
+            this._showToast('Opening email client — send the message to complete sign-up.', 'success');
+          }
+          localStorage.setItem('haven_android_beta_promo_dismissed', '1');
+          modal.style.display = 'none';
         }
-
-        // Remember dismissal
-        localStorage.setItem('haven_android_beta_promo_dismissed', '1');
-        modal.style.display = 'none';
       };
 
       submitBtn.addEventListener('click', handleSubmit);
