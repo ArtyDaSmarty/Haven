@@ -40,7 +40,7 @@ Haven is a self-hosted Discord alternative. Run it on your machine. Invite frien
 
 > **Want Haven on your phone?** Haven Android is a native Android app built from the ground up, now in closed beta on Google Play.
 
-**[Haven Android](https://github.com/ancsemi/Haven-Android)** features full chat and voice support, push notifications, and a true mobile-native experience.
+**Haven Android** features full chat and voice support, push notifications, and a true mobile-native experience.
 
 - **Native Android** — built from scratch specifically for Haven, not a web wrapper
 - **Push Notifications** — real-time notifications via Google Play services
@@ -408,7 +408,7 @@ Planned features — roughly in priority order:
 | **Multi-factor authentication** | 📋 Planned | U2F/FIDO key and TOTP support, with optional admin MFA requirement |
 | **Session invalidation on password change** | 📋 Planned | All active sessions are forcibly logged out when a user changes their password |
 | **Recovery-key password reset** | 📋 Planned | Generate a 24-word recovery phrase from settings — used to reset your password without losing E2E DM history. Existing users get a one-time prompt to generate theirs. No admin involvement, no email required. |
-| **Android App** | � Closed Beta! | https://github.com/ancsemi/Haven-Android — [Sign up for beta](mailto:amnibro7@gmail.com?subject=Haven%20Android%20Beta) |
+| **Android App** | 🟢 Closed Beta! | [Sign up for beta](mailto:amnibro7@gmail.com?subject=Haven%20Android%20Beta) |
 | **Desktop App** | ✅ Beta! | https://github.com/ancsemi/Haven-Desktop |
 
 > Want something else? Open an issue — PRs are always welcome.

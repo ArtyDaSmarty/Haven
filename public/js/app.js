@@ -16363,11 +16363,18 @@ class HavenApp {
   /** Show the "Android Beta" banner and sign-up popup. Users enter their email
    *  and a prefilled mailto: link sends the opt-in request to the developer. */
   _initAndroidBetaBanner() {
+    // ── v2 migration: clear stale v1 keys that permanently poisoned the UI ──
+    if (!sessionStorage.getItem('_ab_v2_migrated')) {
+      localStorage.removeItem('haven_android_beta_banner_dismissed');
+      localStorage.removeItem('haven_android_beta_promo_dismissed');
+      sessionStorage.setItem('_ab_v2_migrated', '1');
+    }
+
     // ── Top-bar banner ──
     // Only permanently hidden if user checked "Don't show this again";
     // the X button is session-only so it returns on next visit.
-    const permaDismissed = localStorage.getItem('haven_android_beta_banner_dismissed');
-    const sessionDismissed = sessionStorage.getItem('haven_android_beta_banner_session');
+    const permaDismissed = localStorage.getItem('haven_ab_banner_nodisplay');
+    const sessionDismissed = sessionStorage.getItem('haven_ab_banner_session');
     if (!permaDismissed && !sessionDismissed) {
       const banner = document.getElementById('android-beta-banner');
       if (banner) {
@@ -16385,7 +16392,7 @@ class HavenApp {
             e.stopPropagation();
             banner.style.display = 'none';
             // Session-only: banner comes back on next page load
-            sessionStorage.setItem('haven_android_beta_banner_session', '1');
+            sessionStorage.setItem('haven_ab_banner_session', '1');
           });
         }
       }
@@ -16396,7 +16403,7 @@ class HavenApp {
     if (!modal) return;
 
     // Show popup on first visit (unless dismissed)
-    if (!localStorage.getItem('haven_android_beta_promo_dismissed')) {
+    if (!localStorage.getItem('haven_ab_promo_nodisplay')) {
       setTimeout(() => {
         // Don't show if the desktop promo is already visible
         const desktopPromo = document.getElementById('desktop-promo-modal');
@@ -16438,7 +16445,7 @@ class HavenApp {
               if (typeof this._showToast === 'function') {
                 this._showToast('Beta request sent! You\'ll be added to the Google Play closed beta soon.', 'success');
               }
-              localStorage.setItem('haven_android_beta_promo_dismissed', '1');
+              localStorage.setItem('haven_ab_promo_nodisplay', '1');
               modal.style.display = 'none';
             } else {
               if (typeof this._showToast === 'function') {
@@ -16458,7 +16465,7 @@ class HavenApp {
           if (typeof this._showToast === 'function') {
             this._showToast('Opening email client — send the message to complete sign-up.', 'success');
           }
-          localStorage.setItem('haven_android_beta_promo_dismissed', '1');
+          localStorage.setItem('haven_ab_promo_nodisplay', '1');
           modal.style.display = 'none';
         }
       };
@@ -16476,8 +16483,8 @@ class HavenApp {
       laterBtn.addEventListener('click', () => {
         const check = document.getElementById('android-beta-dismiss-check');
         if (check && check.checked) {
-          localStorage.setItem('haven_android_beta_promo_dismissed', '1');
-          localStorage.setItem('haven_android_beta_banner_dismissed', '1');
+          localStorage.setItem('haven_ab_promo_nodisplay', '1');
+          localStorage.setItem('haven_ab_banner_nodisplay', '1');
           const banner = document.getElementById('android-beta-banner');
           if (banner) banner.style.display = 'none';
         }
