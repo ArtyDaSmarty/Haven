@@ -111,11 +111,25 @@ function startRgbCycle() {
 
   // Use rAF instead of setInterval to sync with the browser paint cycle
   // and automatically pause when the tab/window is hidden.
+  // Adaptive DOM-size throttle: check DOM node count periodically and skip
+  // style updates when the DOM is too large to process within one frame.
+  // A 5215-node DOM at 20 ticks/sec = ~104k style recalcs/sec — over budget.
+  // A 4000-node DOM at 10 ticks/sec = ~40k — back in budget.
+  // We sample DOM size every 20 ticks (~1 s) to avoid querySelectorAll overhead.
+  let _domTickCount = 0;
+  let _domSize = 0;
   function tick(now) {
     _rgbRAF = requestAnimationFrame(tick);
     if (now - _rgbLastTick < TICK_MS) return;
     _rgbLastTick = now;
     if (document.hidden) return;   // don't burn CPU when not visible
+    // Sample DOM size every 20 ticks (~1 s) — querySelectorAll is itself costly
+    _domTickCount++;
+    if (_domTickCount % 20 === 1) {
+      _domSize = document.querySelectorAll('*').length;
+    }
+    // Skip every other tick when DOM is large (halves the style-recalc rate)
+    if (_domSize > 4000 && _domTickCount % 2 !== 0) return;
     _rgbHue = (_rgbHue + getStep()) % 360;
     const vib = vibrancy / 100;
     const palette = generateCustomPalette(_rgbHue, 0.75, 0.95, vib);

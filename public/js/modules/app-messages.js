@@ -121,7 +121,7 @@ _renderMessages(messages) {
   const container = document.getElementById('messages');
   container.innerHTML = '';
   // Only render the last MAX_DOM_MESSAGES to prevent OOM on large histories
-  const MAX_DOM_MESSAGES = 200;
+  const MAX_DOM_MESSAGES = 100;
   const start = messages.length > MAX_DOM_MESSAGES ? messages.length - MAX_DOM_MESSAGES : 0;
   // Use DocumentFragment to batch all DOM inserts into a single reflow
   const frag = document.createDocumentFragment();
@@ -180,7 +180,7 @@ _prependMessages(messages) {
   // ── DOM trimming: cap total messages to prevent unbounded growth ──
   // When scrolling up loads more history, trim excess messages from the
   // bottom to keep total DOM nodes manageable.
-  const MAX_DOM_MESSAGES = 200;
+  const MAX_DOM_MESSAGES = 100;
   const children = container.children;
   if (children.length > MAX_DOM_MESSAGES) {
     const excess = children.length - MAX_DOM_MESSAGES;
@@ -212,7 +212,7 @@ _appendMessage(message, forceScroll = false) {
 
   // ── DOM trimming: remove oldest messages when the list grows too large ──
   // This prevents unbounded memory growth that causes OOM crashes.
-  const MAX_DOM_MESSAGES = 200;
+  const MAX_DOM_MESSAGES = 100;
   while (container.children.length > MAX_DOM_MESSAGES) {
     container.removeChild(container.firstElementChild);
   }

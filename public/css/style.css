@@ -3925,6 +3925,12 @@ html.rgb-cycling *::after {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
+  /* Skip rendering/style-recalc for off-screen messages during RGB cycling.
+     Chromium omits content-visibility:auto elements from the style-cascade
+     update until they scroll into the viewport, which dramatically cuts the
+     per-tick cost of CSS-variable changes when many messages are in the DOM. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 64px;
 }
 
 .message:hover {
