@@ -79,8 +79,9 @@ function clearCustomVars() {
 // ═══════════════════════════════════════════════════════════
 // RGB CYCLING THEME
 // ═══════════════════════════════════════════════════════════
-let _rgbInterval = null;
+let _rgbRAF = null;
 let _rgbHue = 0;
+let _rgbLastTick = 0;
 
 function startRgbCycle() {
   stopRgbCycle();
@@ -88,17 +89,34 @@ function startRgbCycle() {
   let speed    = saved ? saved.speed    : 30;   // 1-100
   let vibrancy = saved ? saved.vibrancy : 75;   // 10-100
 
-  // Fixed 16ms tick (~60 fps). Speed controls hue step per tick:
-  // speed 1 → 0.8°/tick (50°/sec), speed 100 → 4.0°/tick (250°/sec)
-  const TICK = 16;
+  // Tick every 50ms (~20 fps) instead of 16ms (60 fps).
+  // Color cycling is perceptually smooth at 20 fps and this reduces CSS
+  // custom-property invalidation from 60×/s to 20×/s, which was the #1
+  // cause of progressive renderer slowdown (every setProperty call
+  // invalidates all computed styles and restarts CSS transitions on every
+  // element that references those variables — 200+ messages × 25 props).
+  const TICK_MS = 50;
   function getStep() { return 0.8 + (speed / 100) * 3.2; }
 
-  _rgbInterval = setInterval(() => {
+  // Use rAF instead of setInterval to sync with the browser paint cycle
+  // and automatically pause when the tab/window is hidden.
+  function tick(now) {
+    _rgbRAF = requestAnimationFrame(tick);
+    if (now - _rgbLastTick < TICK_MS) return;
+    _rgbLastTick = now;
+    if (document.hidden) return;   // don't burn CPU when not visible
     _rgbHue = (_rgbHue + getStep()) % 360;
     const vib = vibrancy / 100;
     const palette = generateCustomPalette(_rgbHue, 0.75, 0.95, vib);
     applyCustomVars(palette);
-  }, TICK);
+  }
+  _rgbRAF = requestAnimationFrame(tick);
+
+  // Mark the document so CSS can suppress transitions during RGB cycling.
+  // Without this, every CSS-variable change starts/interrupts background
+  // transitions on hundreds of elements, creating a compounding compositor
+  // workload that freezes the renderer within minutes.
+  document.documentElement.classList.add('rgb-cycling');
 
   // Expose updaters so sliders can adjust live (no restart needed — step recalcs each tick)
   startRgbCycle._setSpeed = (v) => {
@@ -112,7 +130,8 @@ function startRgbCycle() {
 }
 
 function stopRgbCycle() {
-  if (_rgbInterval) { clearInterval(_rgbInterval); _rgbInterval = null; }
+  if (_rgbRAF) { cancelAnimationFrame(_rgbRAF); _rgbRAF = null; }
+  document.documentElement.classList.remove('rgb-cycling');
   startRgbCycle._setSpeed = null;
   startRgbCycle._setVibrancy = null;
 }
@@ -778,7 +797,11 @@ function _startMatrixRain() {
   }
   initDrops();
 
-  function draw() {
+  let _matrixLastFrame = 0;
+  function draw(now) {
+    _matrixRAF = requestAnimationFrame(draw);
+    if (now - _matrixLastFrame < 33 || document.hidden) return;
+    _matrixLastFrame = now;
     _matrixCtx.fillStyle = 'rgba(0, 0, 0, 0.03)';
     _matrixCtx.fillRect(0, 0, canvas.width, canvas.height);
     _matrixCtx.font = fontSize + 'px monospace';
@@ -806,9 +829,8 @@ function _startMatrixRain() {
       const speedM = _getFxSpeed('matrix');
       _matrixDrops[i] += (0.4 + Math.random() * 0.6) * speedM;
     }
-    _matrixRAF = requestAnimationFrame(draw);
   }
-  draw();
+  _matrixRAF = requestAnimationFrame(draw);
 
   canvas._resizeHandler = () => { resize(); initDrops(); };
   window.addEventListener('resize', canvas._resizeHandler);
@@ -866,7 +888,11 @@ function _startEmbers() {
     });
   }
 
-  function draw() {
+  let _emberLastFrame = 0;
+  function draw(now) {
+    _emberRAF = requestAnimationFrame(draw);
+    if (now - _emberLastFrame < 33 || document.hidden) return;
+    _emberLastFrame = now;
     _emberCtx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Spawn fewer embers, concentrated in center
@@ -909,9 +935,8 @@ function _startEmbers() {
       _emberCtx.restore();
     }
     _emberCtx.globalAlpha = 1;
-    _emberRAF = requestAnimationFrame(draw);
   }
-  draw();
+  _emberRAF = requestAnimationFrame(draw);
 
   canvas._resizeHandler = resize;
   window.addEventListener('resize', canvas._resizeHandler);
@@ -984,7 +1009,11 @@ function _startGraceEmbers() {
     ctx.restore();
   }
 
-  function draw() {
+  let _graceLastFrame = 0;
+  function draw(now) {
+    _graceRAF = requestAnimationFrame(draw);
+    if (now - _graceLastFrame < 33 || document.hidden) return;
+    _graceLastFrame = now;
     _graceCtx.clearRect(0, 0, canvas.width, canvas.height);
 
     const speedM = _getFxSpeed('eldenring');
@@ -1023,9 +1052,8 @@ function _startGraceEmbers() {
       _graceCtx.restore();
     }
     _graceCtx.globalAlpha = 1;
-    _graceRAF = requestAnimationFrame(draw);
   }
-  draw();
+  _graceRAF = requestAnimationFrame(draw);
 
   canvas._resizeHandler = resize;
   window.addEventListener('resize', canvas._resizeHandler);
@@ -1076,7 +1104,11 @@ function _startNordSnow() {
     });
   }
 
-  function draw() {
+  let _snowLastFrame = 0;
+  function draw(now) {
+    _snowRAF = requestAnimationFrame(draw);
+    if (now - _snowLastFrame < 33 || document.hidden) return;
+    _snowLastFrame = now;
     _snowCtx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Spawn snowflakes at random intervals — density scales with width
@@ -1123,9 +1155,8 @@ function _startNordSnow() {
       _snowCtx.fill();
     }
     _snowCtx.globalAlpha = 1;
-    _snowRAF = requestAnimationFrame(draw);
   }
-  draw();
+  _snowRAF = requestAnimationFrame(draw);
 
   canvas._resizeHandler = resize;
   window.addEventListener('resize', canvas._resizeHandler);

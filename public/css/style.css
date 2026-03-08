@@ -1817,6 +1817,27 @@ input[type="range"]:not(.rgb-slider)::-moz-range-track {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
+/* ── RGB-cycling performance guard ──────────────────────────
+   When the RGB theme is active, theme.js adds .rgb-cycling to <html>.
+   CSS custom-property updates fire 20×/s which would restart every
+   transition that references a variable. Suppressing transition-duration
+   prevents the compositor from accumulating thousands of interrupted
+   animation state-machines that progressively starve the renderer. */
+html.rgb-cycling .message,
+html.rgb-cycling .channel-item,
+html.rgb-cycling .user-item,
+html.rgb-cycling .sidebar,
+html.rgb-cycling .right-sidebar,
+html.rgb-cycling .main,
+html.rgb-cycling .header,
+html.rgb-cycling .footer,
+html.rgb-cycling input,
+html.rgb-cycling textarea,
+html.rgb-cycling button,
+html.rgb-cycling .led {
+  transition-duration: 0s !important;
+}
+
 
 /* ═══════════════════════════════════════════════════════════
    LED / STATUS INDICATORS
@@ -3912,11 +3933,13 @@ input[type="range"]:not(.rgb-slider)::-moz-range-track {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
+}
+
+.message:hover {
+  background: rgba(255,255,255,0.02);
   transition: background var(--transition);
   box-shadow: var(--msg-glow);
 }
-
-.message:hover { background: rgba(255,255,255,0.02); }
 
 .message-row {
   display: flex;
