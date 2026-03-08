@@ -851,34 +851,127 @@ _setLed(id, state) {
   el.className = 'led ' + state;
 },
 
-// ── Performance diagnostics ────────────────────────────
-// Toggle from console:  app._perfMonitor(true);  / app._perfMonitor(false);
-_perfMonitor(enable) {
+// ═══════════════════════════════════════════════════════════
+// Automatic Performance Diagnostics
+//
+// Starts automatically 30 s after init.  Samples FPS once per second,
+// and every 15 s evaluates the trend.  If average FPS is dropping or
+// already low, logs a diagnostic snapshot to the console (which the
+// Desktop app forwards to its server-log panel).
+//
+// Manual HUD toggle:  app._perfHUD(true)  / app._perfHUD(false)
+// ═══════════════════════════════════════════════════════════
+
+_startPerfDiagnostics() {
+  if (this._perfDiag) return; // already running
+
+  const SAMPLE_INTERVAL = 1000;   // measure one FPS reading every 1 s
+  const REPORT_INTERVAL = 15000;  // evaluate + log every 15 s
+  const FPS_WARN        = 30;     // warn below this average
+  const FPS_CRITICAL    = 12;     // critical — user is seeing freeze
+
+  const samples = [];             // rolling window of {fps, ts}
+  const MAX_SAMPLES = 60;         // keep last 60 s of FPS readings
+  let frameCount = 0;
+  let lastSampleTime = performance.now();
+  let rafId = null;
+  let reportTimer = null;
+
+  // Count frames via rAF
+  const countFrame = (now) => {
+    rafId = requestAnimationFrame(countFrame);
+    frameCount++;
+    const elapsed = now - lastSampleTime;
+    if (elapsed >= SAMPLE_INTERVAL) {
+      const fps = Math.round(frameCount * 1000 / elapsed);
+      samples.push({ fps, ts: Date.now() });
+      if (samples.length > MAX_SAMPLES) samples.shift();
+      frameCount = 0;
+      lastSampleTime = now;
+    }
+  };
+  rafId = requestAnimationFrame(countFrame);
+
+  // Periodic evaluation
+  reportTimer = setInterval(() => {
+    if (samples.length < 5) return; // not enough data yet
+
+    const recent = samples.slice(-15); // last ~15 seconds
+    const avgFps = Math.round(recent.reduce((s, r) => s + r.fps, 0) / recent.length);
+    const minFps = Math.min(...recent.map(r => r.fps));
+
+    // Trend: compare first half vs second half
+    const half = Math.floor(recent.length / 2);
+    const firstHalfAvg = recent.slice(0, half).reduce((s, r) => s + r.fps, 0) / half;
+    const secondHalfAvg = recent.slice(half).reduce((s, r) => s + r.fps, 0) / (recent.length - half);
+    const trend = secondHalfAvg - firstHalfAvg; // negative = degrading
+
+    // Collect system context
+    const mem = performance.memory
+      ? { heapUsed: Math.round(performance.memory.usedJSHeapSize / 1048576), heapTotal: Math.round(performance.memory.totalJSHeapSize / 1048576) }
+      : null;
+    const domCount = document.querySelectorAll('*').length;
+    const msgCount = document.getElementById('messages')?.children.length || 0;
+    const visibleModals = document.querySelectorAll('.modal-overlay[style*="display:flex"], .modal-overlay[style*="display: flex"]').length;
+    const isRgbCycling = document.documentElement.classList.contains('rgb-cycling');
+    const theme = document.documentElement.getAttribute('data-theme') || 'none';
+
+    // Determine severity
+    let severity = null;
+    if (avgFps < FPS_CRITICAL) severity = 'CRITICAL';
+    else if (avgFps < FPS_WARN) severity = 'WARNING';
+    else if (trend < -10 && avgFps < 50) severity = 'DEGRADING';
+
+    if (severity) {
+      const report = [
+        `[Haven Perf ${severity}]`,
+        `FPS avg:${avgFps} min:${minFps} trend:${trend > 0 ? '+' : ''}${Math.round(trend)}`,
+        mem ? `Heap:${mem.heapUsed}/${mem.heapTotal}MB` : '',
+        `DOM:${domCount} msgs:${msgCount} modals-open:${visibleModals}`,
+        `theme:${theme} rgb:${isRgbCycling}`,
+        `samples:[${recent.map(r => r.fps).join(',')}]`,
+      ].filter(Boolean).join(' | ');
+      console.warn(report);
+    }
+
+    // Always log a quiet heartbeat every 60 s (every 4th report) for baseline tracking
+    if (samples.length % 4 === 0) {
+      console.log(`[Haven Perf] FPS:${avgFps} trend:${trend > 0 ? '+' : ''}${Math.round(trend)} DOM:${domCount}${mem ? ' heap:' + mem.heapUsed + 'MB' : ''} rgb:${isRgbCycling}`);
+    }
+  }, REPORT_INTERVAL);
+
+  this._perfDiag = { rafId, reportTimer, samples };
+},
+
+// Toggle visual HUD overlay: app._perfHUD(true)
+_perfHUD(enable) {
   if (!enable) {
-    if (this._perfRAF) cancelAnimationFrame(this._perfRAF);
-    this._perfRAF = null;
+    if (this._perfHudRAF) cancelAnimationFrame(this._perfHudRAF);
+    this._perfHudRAF = null;
     const hud = document.getElementById('_perf_hud');
     if (hud) hud.remove();
     return;
   }
-  if (this._perfRAF) return; // already running
+  if (this._perfHudRAF) return;
   const hud = document.createElement('div');
   hud.id = '_perf_hud';
-  hud.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;background:rgba(0,0,0,.8);color:#0f0;font:12px monospace;padding:4px 8px;border-radius:4px;pointer-events:none';
+  hud.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;background:rgba(0,0,0,.85);color:#0f0;font:12px monospace;padding:6px 10px;border-radius:4px;pointer-events:none;white-space:pre';
   document.body.appendChild(hud);
   let frames = 0, lastSec = performance.now();
   const tick = (now) => {
-    this._perfRAF = requestAnimationFrame(tick);
+    this._perfHudRAF = requestAnimationFrame(tick);
     frames++;
     if (now - lastSec >= 1000) {
       const fps = Math.round(frames * 1000 / (now - lastSec));
       const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : '?';
-      hud.textContent = `FPS: ${fps}  Heap: ${mem} MB  DOM: ${document.querySelectorAll('*').length}`;
+      const dom = document.querySelectorAll('*').length;
+      const rgb = document.documentElement.classList.contains('rgb-cycling') ? ' RGB' : '';
+      hud.textContent = `FPS: ${fps}  Heap: ${mem} MB  DOM: ${dom}${rgb}`;
       frames = 0;
       lastSec = now;
     }
   };
-  this._perfRAF = requestAnimationFrame(tick);
+  this._perfHudRAF = requestAnimationFrame(tick);
 },
 
 };

@@ -200,6 +200,9 @@ class HavenApp {
     this.socket.emit('get-preferences');
     this.socket.emit('get-high-scores', { game: 'flappy' });
 
+    // ── Auto-start performance diagnostics after startup settles ──
+    setTimeout(() => this._startPerfDiagnostics(), 30000);
+
     // E2E init is deferred to 'session-info' handler to ensure
     // the socket is fully connected and server-side handlers are registered.
 
