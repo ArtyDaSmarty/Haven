@@ -138,6 +138,12 @@ _setupSocketListeners() {
       if (this.socket && !this.socket.connected) {
         this.socket.connect();
       }
+      // Delayed fallback: on some mobile browsers the WebSocket dies moments
+      // after the tab resumes rather than before, so the immediate check above
+      // might see it as "still connected."  Retry a couple of seconds later.
+      setTimeout(() => {
+        if (this.socket && !this.socket.connected) this.socket.connect();
+      }, 2500);
       // Skip heavy refresh if we just handled a 'connect' event (avoids doubled emits)
       const sinceLast = Date.now() - (this._lastConnectTime || 0);
       if (sinceLast < 3000) return;
@@ -169,6 +175,14 @@ _setupSocketListeners() {
           }, 500);
         }
       } catch {}
+    }
+  });
+
+  // iOS Safari bfcache: page is restored from cache (back/forward nav or tab switch)
+  // without a visibilitychange event — reconnect if the socket is stale.
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && this.socket && !this.socket.connected) {
+      this.socket.connect();
     }
   });
 

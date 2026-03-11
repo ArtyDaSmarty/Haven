@@ -92,7 +92,9 @@ _formatContent(str) {
     if (['mp4', 'webm'].includes(ext)) {
       return `<div class="file-attachment">
         <div class="file-info">${icon} <span class="file-name">${fileName}</span> <span class="file-size">(${fileSize})</span></div>
-        <video controls preload="none" src="${fileUrl}" class="file-video"></video>
+        <div class="file-video-wrap">
+          <video controls preload="none" src="${fileUrl}" class="file-video"></video>
+        </div>
       </div>`;
     }
     return `<div class="file-attachment">

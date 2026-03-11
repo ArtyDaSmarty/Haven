@@ -147,6 +147,7 @@ _renderMessages(messages) {
   });
   // Fetch link previews for all messages
   this._fetchLinkPreviews(container);
+  this._setupVideos(container);
   // Mark as read (last message ID)
   if (messages.length > 0) {
     this._markRead(messages[messages.length - 1].id);
@@ -207,6 +208,7 @@ _prependMessages(messages) {
 
   // Fetch link previews for prepended messages
   this._fetchLinkPreviews(container);
+  this._setupVideos(container);
 },
 
 /** Append newer messages to the bottom (forward pagination), trimming old ones from top */
@@ -247,6 +249,7 @@ _appendMessages(messages) {
   if (trimmed) this._noMoreHistory = false;
 
   this._fetchLinkPreviews(container);
+  this._setupVideos(container);
 
   // Mark as read so the server-side read position advances
   if (messages.length > 0) {
@@ -298,6 +301,7 @@ _appendMessage(message, forceScroll = false) {
 
   // Fetch link previews for this message
   this._fetchLinkPreviews(msgEl);
+  this._setupVideos(msgEl);
   if (wasAtBottom) {
     this._scrollToBottom(true);
   }
@@ -566,6 +570,68 @@ _renderPinnedPanel(pins) {
         setTimeout(() => msgEl.classList.remove('highlight-flash'), 2000);
       }
       panel.style.display = 'none';
+    });
+  });
+},
+
+// ── Link Previews ─────────────────────────────────────
+
+/** Wire up fullscreen button and PiP seek support for uploaded video elements */
+_setupVideos(containerEl) {
+  containerEl.querySelectorAll('.file-video').forEach(video => {
+    if (video.dataset.havenSetup) return;
+    video.dataset.havenSetup = '1';
+
+    // Inject a fullscreen button so Electron (where native controls' fullscreen
+    // button may be non-functional) has a reliable way to go fullscreen.
+    const wrap = video.closest('.file-video-wrap');
+    if (wrap) {
+      const fsBtn = document.createElement('button');
+      fsBtn.className = 'file-video-fs-btn';
+      fsBtn.title = 'Fullscreen';
+      fsBtn.innerHTML = '⛶';
+      fsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const fn = video.requestFullscreen || video.webkitRequestFullscreen;
+        if (fn) fn.call(video);
+      });
+      wrap.appendChild(fsBtn);
+    }
+
+    // PiP: wire up MediaSession so the PiP window shows a seek bar
+    const updatePos = () => {
+      try {
+        if (!isNaN(video.duration) && video.duration > 0) {
+          navigator.mediaSession?.setPositionState({
+            duration: video.duration,
+            position: Math.min(video.currentTime, video.duration),
+            playbackRate: video.playbackRate || 1,
+          });
+        }
+      } catch {}
+    };
+    video.addEventListener('enterpictureinpicture', () => {
+      try {
+        navigator.mediaSession?.setActionHandler('seekto', (d) => {
+          if (d.seekTime !== undefined) { video.currentTime = d.seekTime; updatePos(); }
+        });
+        navigator.mediaSession?.setActionHandler('seekbackward', (d) => {
+          video.currentTime = Math.max(0, video.currentTime - (d.seekOffset || 10)); updatePos();
+        });
+        navigator.mediaSession?.setActionHandler('seekforward', (d) => {
+          video.currentTime = Math.min(video.duration, video.currentTime + (d.seekOffset || 10)); updatePos();
+        });
+        video.addEventListener('timeupdate', updatePos);
+        updatePos();
+      } catch {}
+    });
+    video.addEventListener('leavepictureinpicture', () => {
+      try {
+        navigator.mediaSession?.setActionHandler('seekto', null);
+        navigator.mediaSession?.setActionHandler('seekbackward', null);
+        navigator.mediaSession?.setActionHandler('seekforward', null);
+      } catch {}
+      video.removeEventListener('timeupdate', updatePos);
     });
   });
 },
