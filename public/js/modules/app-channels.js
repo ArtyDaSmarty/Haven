@@ -1096,15 +1096,16 @@ _renderChannels() {
     const hashIcon = isSub ? (ch.is_private ? '🔒' : '↳') : (isAnnouncement ? '📢' : '#');
 
     // Build small status indicators for channel features
-    let indicators = '';
+    const _badges = [];
     if (!isSub) {
-      const badges = [];
-      if (ch.streams_enabled === 0) badges.push('<span title="Streams disabled" style="opacity:0.4;font-size:0.65rem">🖥️</span>');
-      if (ch.music_enabled === 0) badges.push('<span title="Music disabled" style="opacity:0.4;font-size:0.65rem">🎵</span>');
-      if (ch.slow_mode_interval > 0) badges.push('<span title="Slow mode: ' + ch.slow_mode_interval + 's" style="opacity:0.5;font-size:0.65rem">🐢</span>');
-      if (ch.cleanup_exempt === 1) badges.push('<span title="Exempt from auto-cleanup" style="opacity:0.5;font-size:0.65rem">🛡️</span>');
-      if (badges.length) indicators = `<span class="channel-indicators" style="margin-left:auto;display:flex;gap:2px;flex-shrink:0">${badges.join('')}</span>`;
+      if (ch.streams_enabled === 0) _badges.push('<span class="ch-disabled-badge" title="Screen sharing not allowed">🖥️</span>');
+      if (ch.music_enabled === 0) _badges.push('<span class="ch-disabled-badge" title="Music not allowed">🎵</span>');
+      if (ch.slow_mode_interval > 0) _badges.push('<span title="Slow mode: ' + ch.slow_mode_interval + 's" style="opacity:0.5;font-size:0.65rem">🐢</span>');
+      if (ch.cleanup_exempt === 1) _badges.push('<span title="Exempt from auto-cleanup" style="opacity:0.5;font-size:0.65rem">🛡️</span>');
     }
+    const _mutedList = JSON.parse(localStorage.getItem('haven_muted_channels') || '[]');
+    if (_mutedList.includes(ch.code)) _badges.push('<span title="Muted" style="opacity:0.5;font-size:0.7rem">🔕</span>');
+    const indicators = _badges.length ? `<span class="channel-indicators" style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">${_badges.join('')}</span>` : '';
 
     el.innerHTML = `
       ${hasSubs ? `<span class="channel-collapse-arrow${isCollapsed ? ' collapsed' : ''}" title="Expand/collapse sub-channels">▾</span>` : ''}

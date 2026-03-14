@@ -3650,6 +3650,29 @@ html.rgb-cycling *::after {
   cursor: pointer;
 }
 
+/* Disabled-feature badge (streams/music not allowed) — red diagonal slash overlay */
+.ch-disabled-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  opacity: 0.75;
+}
+.ch-disabled-badge::after {
+  content: '';
+  position: absolute;
+  inset: 0 1px;
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1px),
+    #e74c3c calc(50% - 1px),
+    #e74c3c calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+  pointer-events: none;
+}
+
 /* Channel context menu (sidebar "..." hover button) */
 .channel-item { position: relative; }
 .channel-more-btn {
