@@ -1104,7 +1104,7 @@ _renderChannels() {
       if (ch.cleanup_exempt === 1) _badges.push('<span title="Exempt from auto-cleanup" style="opacity:0.5;font-size:0.65rem">🛡️</span>');
     }
     const _mutedList = JSON.parse(localStorage.getItem('haven_muted_channels') || '[]');
-    if (_mutedList.includes(ch.code)) _badges.push('<span title="Muted" style="opacity:0.5;font-size:0.7rem">🔕</span>');
+    if (_mutedList.includes(ch.code)) _badges.push('<span class="ch-disabled-badge" title="Muted">🔔</span>');
     const indicators = _badges.length ? `<span class="channel-indicators" style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">${_badges.join('')}</span>` : '';
 
     el.innerHTML = `
