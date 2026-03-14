@@ -342,17 +342,20 @@ _setupSocketListeners() {
   const msgContainer = document.getElementById('messages');
   if (msgContainer) {
     // Track whether the user is "coupled" to the bottom of the feed.
+    // Simple rule: near bottom → true, scrolled up at all → false.
     this._coupledToBottom = true;
+    let lastScrollTop = msgContainer.scrollTop;
     msgContainer.addEventListener('scroll', () => {
       if (this._suppressCoupleCheck) return;
-      const dist = msgContainer.scrollHeight - msgContainer.clientHeight - msgContainer.scrollTop;
-      if (dist < 150) {
+      const st = msgContainer.scrollTop;
+      const dist = msgContainer.scrollHeight - msgContainer.clientHeight - st;
+      if (dist < 200) {
         this._coupledToBottom = true;
-      } else if (dist > 300) {
-        // Hysteresis: only uncouple when scrolled a meaningful distance
-        // so small layout shifts from image loads don't false-trigger.
+      } else if (st < lastScrollTop) {
+        // User scrolled up — decouple immediately
         this._coupledToBottom = false;
       }
+      lastScrollTop = st;
     }, { passive: true });
 
     this._historyDebounce = 0; // timestamp of last history request

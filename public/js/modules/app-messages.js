@@ -131,10 +131,11 @@ _renderMessages(messages) {
   }
   container.appendChild(frag);
   this._scrollToBottom(true);
-  // Re-scroll after images load — force-scroll since user should be at
-  // bottom on initial channel load
+  // Re-scroll after images load, but only if user hasn't scrolled away
   container.querySelectorAll('img').forEach(img => {
-    if (!img.complete) img.addEventListener('load', () => this._scrollToBottom(true), { once: true });
+    if (!img.complete) img.addEventListener('load', () => {
+      if (this._coupledToBottom) this._scrollToBottom(true);
+    }, { once: true });
   });
   // Fetch link previews for all messages
   this._fetchLinkPreviews(container);
@@ -302,23 +303,16 @@ _appendMessage(message, forceScroll = false) {
   if (wasAtBottom) {
     this._scrollToBottom(true);
   }
-  // Scroll after images/gifs load — force-scroll if user was at bottom
-  // when the message was appended (prevents media from pushing user up)
+  // Scroll after images/gifs load, but only if still coupled to bottom
   const imgs = msgEl.querySelectorAll('img');
   if (imgs.length) {
-    const forceOnLoad = wasAtBottom;
     imgs.forEach(img => {
       if (!img.complete) {
         img.addEventListener('load', () => {
-          if (forceOnLoad) {
-            this._scrollToBottom(true);
-          } else {
-            this._scrollToBottom();
-          }
+          if (this._coupledToBottom) this._scrollToBottom(true);
         }, { once: true });
-        // Also handle error case (broken images shouldn't block scroll)
         img.addEventListener('error', () => {
-          if (forceOnLoad) this._scrollToBottom(true);
+          if (this._coupledToBottom) this._scrollToBottom(true);
         }, { once: true });
       }
     });

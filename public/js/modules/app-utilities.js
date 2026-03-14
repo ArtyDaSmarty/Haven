@@ -288,7 +288,6 @@ _scrollToBottom(force) {
   const el = document.getElementById('messages');
   if (force || this._coupledToBottom) {
     el.scrollTop = el.scrollHeight;
-    this._coupledToBottom = true;
   }
 },
 
