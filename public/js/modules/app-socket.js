@@ -344,6 +344,7 @@ _setupSocketListeners() {
     // Track whether the user is "coupled" to the bottom of the feed.
     this._coupledToBottom = true;
     msgContainer.addEventListener('scroll', () => {
+      if (this._suppressCoupleCheck) return;
       const dist = msgContainer.scrollHeight - msgContainer.clientHeight - msgContainer.scrollTop;
       if (dist < 150) {
         this._coupledToBottom = true;
@@ -356,6 +357,7 @@ _setupSocketListeners() {
 
     this._historyDebounce = 0; // timestamp of last history request
     msgContainer.addEventListener('scroll', () => {
+      if (this._suppressCoupleCheck) return;
       const now = Date.now();
       if (msgContainer.scrollTop < 200 && !this._noMoreHistory && !this._loadingHistory && this._oldestMsgId && this.currentChannel && now - this._historyDebounce > 300) {
         this._loadingHistory = true;

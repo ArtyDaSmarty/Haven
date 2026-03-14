@@ -186,6 +186,9 @@ _prependMessages(messages) {
     }
   }
 
+  // Suppress coupling + pagination listeners while we mutate the DOM
+  this._suppressCoupleCheck = true;
+
   // Trim from bottom BEFORE insert so scrollHeight is stable after scroll restore
   const MAX_DOM_MESSAGES = 100;
   const toTrim = Math.max(0, container.children.length + messages.length - MAX_DOM_MESSAGES);
@@ -209,6 +212,8 @@ _prependMessages(messages) {
     const drift = (anchorRect.top - containerRect.top) - anchorOffset;
     container.scrollTop += drift;
   }
+
+  this._suppressCoupleCheck = false;
 
   this._fetchLinkPreviews(container);
   this._setupVideos(container);
