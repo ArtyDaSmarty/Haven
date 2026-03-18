@@ -2756,11 +2756,35 @@ html.rgb-cycling *::after {
   font-weight: 700;
   letter-spacing: 6px;
   color: var(--text-primary);
-  margin: 8px 0 4px;
+  margin: 6px 0 0;
   font-family: var(--font-heading);
 }
 
-.auth-header .tagline { color: var(--text-secondary); font-size: 14px; }
+.auth-header .tagline { color: var(--text-secondary); font-size: 12px; margin: 1px 0 0; }
+
+.auth-header .server-title {
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin: 6px 0 0;
+  font-family: var(--font-heading);
+  word-break: break-word;
+}
+.auth-header .server-title:empty { display: none; }
+
+.auth-recovery-links {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+}
+.auth-recovery-links a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.8rem;
+}
 
 .auth-tabs {
   display: flex;

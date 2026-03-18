@@ -575,10 +575,15 @@ app.get('/api/version', (req, res) => {
 app.get('/api/public-config', (req, res) => {
   try {
     const { getDb } = require('./src/database');
-    const row = getDb().prepare("SELECT value FROM server_settings WHERE key = 'default_theme'").get();
-    res.json({ default_theme: row?.value || '' });
+    const db = getDb();
+    const themeRow = db.prepare("SELECT value FROM server_settings WHERE key = 'default_theme'").get();
+    const titleRow = db.prepare("SELECT value FROM server_settings WHERE key = 'server_title'").get();
+    res.json({
+      default_theme: themeRow?.value || '',
+      server_title: titleRow?.value || ''
+    });
   } catch {
-    res.json({ default_theme: '' });
+    res.json({ default_theme: '', server_title: '' });
   }
 });
 

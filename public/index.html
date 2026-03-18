@@ -17,6 +17,7 @@
         <div class="logo">⬡</div>
         <h1>HAVEN</h1>
         <p class="tagline">Private chat, your rules</p>
+        <p class="server-title" id="server-title"></p>
       </div>
 
       <div class="auth-tabs">
@@ -34,16 +35,14 @@
           <input type="password" id="login-password" autocomplete="current-password" required>
         </div>
         <button type="submit" class="btn-primary">Login</button>
-        <p id="admin-recover-link" style="text-align:center;margin-top:8px;font-size:0.8rem">
-          <a href="#" id="admin-recover-show" style="color:var(--text-muted);text-decoration:none">Locked out? Admin recovery</a>
-        </p>
-        <div id="admin-recover-section" style="display:none;text-align:center;margin-top:8px">
+        <div class="auth-recovery-links">
+          <a href="#" id="forgot-password-show">Forgot password?</a>
+          <a href="#" id="admin-recover-show">Locked out? Admin recovery</a>
+        </div>
+        <div id="admin-recover-section" style="display:none;text-align:center;margin-top:6px">
           <small style="color:var(--text-muted)">Enter your admin credentials above and click Recover</small><br>
           <button type="button" class="btn-primary" id="admin-recover-btn" style="margin-top:6px;font-size:0.85rem;padding:6px 16px">Recover Admin Access</button>
         </div>
-        <p style="text-align:center;margin-top:6px;font-size:0.8rem">
-          <a href="#" id="forgot-password-show" style="color:var(--text-muted);text-decoration:none">Forgot password?</a>
-        </p>
       </form>
 
       <form id="register-form" class="auth-form" style="display:none">

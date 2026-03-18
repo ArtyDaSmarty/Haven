@@ -3457,7 +3457,7 @@ function setupSocketHandlers(io, db) {
       const key = typeof data.key === 'string' ? data.key.trim() : '';
       const value = typeof data.value === 'string' ? data.value.trim() : '';
 
-      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'setup_wizard_complete', 'update_banner_admin_only', 'default_theme'];
+      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'setup_wizard_complete', 'update_banner_admin_only', 'default_theme'];
       if (!allowedKeys.includes(key)) return;
 
       if (key === 'member_visibility' && !['all', 'online', 'none'].includes(value)) return;
@@ -3480,6 +3480,9 @@ function setupSocketHandlers(io, db) {
       }
       if (key === 'server_name') {
         if (value.length > 32) return;
+      }
+      if (key === 'server_title') {
+        if (value.length > 40) return;
       }
       if (key === 'server_icon') {
         if (value && !isValidUploadPath(value)) return;
@@ -4695,76 +4698,32 @@ function setupSocketHandlers(io, db) {
         return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
       });
 
-      // Build "all server users" list for recipients with view_all_members perm.
-      // Only built on demand (lazy) to avoid the cost when nobody needs it.
-      let _allServerUsers = null;
-      function getAllServerUsers() {
-        if (_allServerUsers) return _allServerUsers;
-        const globalOnlineIds = new Set();
-        for (const [, s2] of io.of('/').sockets) {
-          if (s2.user) globalOnlineIds.add(s2.user.id);
-        }
-        const allRows = db.prepare(
-          `SELECT u.id, COALESCE(u.display_name, u.username) as username
-           FROM users u LEFT JOIN bans b ON u.id = b.user_id
-           WHERE b.id IS NULL
-           ORDER BY COALESCE(u.display_name, u.username)`
-        ).all();
-        _allServerUsers = allRows.map(m => ({
-          id: m.id, username: m.username, online: globalOnlineIds.has(m.id),
-          highScore: scores[m.id] || 0,
-          status: statusMap[m.id]?.status || 'online',
-          statusText: statusMap[m.id]?.statusText || '',
-          avatar: statusMap[m.id]?.avatar || null,
-          avatarShape: statusMap[m.id]?.avatarShape || 'circle',
-          role: getUserHighestRole(m.id, channel ? channel.id : null)
-        }));
-        _allServerUsers.sort((a, b) => {
-          if (a.online !== b.online) return a.online ? -1 : 1;
-          return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
-        });
-        return _allServerUsers;
-      }
-
-      // Check if per-socket emission is needed
+      // Check if per-socket emission is needed (invisible users require per-viewer filtering)
       const hasInvisible = users.some(u => u.status === 'invisible');
-      let hasViewAll = false;
-      for (const [, s] of io.of('/').sockets) {
-        if (s.user && s.rooms && s.rooms.has(`channel:${code}`)) {
-          if (s.user.isAdmin || userHasPermission(s.user.id, 'view_all_members')) {
-            hasViewAll = true;
-            break;
-          }
-        }
-      }
 
-      if (!hasInvisible && !hasViewAll) {
-        // Fast path: no invisible users and no view_all_members, broadcast to everyone
+      if (!hasInvisible) {
+        // Fast path: no invisible users, broadcast to everyone
         io.to(`channel:${code}`).emit('online-users', {
           channelCode: code,
           users,
           visibilityMode: mode
         });
       } else {
-        // Per-socket path: customizes list for invisible users and view_all_members
+        // Per-socket path: hide invisible users from non-self viewers
         for (const [, s] of io.of('/').sockets) {
           if (!s.user || !s.rooms || !s.rooms.has(`channel:${code}`)) continue;
           const viewerId = s.user.id;
-          const viewerHasViewAll = s.user.isAdmin || userHasPermission(viewerId, 'view_all_members');
-          let baseList = viewerHasViewAll ? getAllServerUsers() : users;
 
-          const customUsers = baseList.map(u => {
+          const customUsers = users.map(u => {
             if (u.status === 'invisible' && u.id !== viewerId) {
               return { ...u, online: false, status: 'offline' };
             }
             return u;
           });
-          if (hasInvisible) {
-            customUsers.sort((a, b) => {
-              if (a.online !== b.online) return a.online ? -1 : 1;
-              return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
-            });
-          }
+          customUsers.sort((a, b) => {
+            if (a.online !== b.online) return a.online ? -1 : 1;
+            return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
+          });
           s.emit('online-users', {
             channelCode: code,
             users: customUsers,
@@ -5103,6 +5062,52 @@ function setupSocketHandlers(io, db) {
       // Refresh all online users' role data
       for (const [code] of channelUsers) { emitOnlineUsers(code); }
       cb({ success: true });
+    });
+
+    // ── Reset Roles to Default ────────────────────────────
+    socket.on('reset-roles-to-default', (data, callback) => {
+      const cb = typeof callback === 'function' ? callback : () => {};
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can reset roles' });
+
+      try {
+        // Wipe all existing roles & related data
+        db.exec('DELETE FROM user_roles');
+        db.exec('DELETE FROM role_permissions');
+        db.exec('DELETE FROM role_channel_access');
+        db.exec('DELETE FROM roles');
+
+        // Re-seed defaults (mirrors database.js init)
+        const insertRole = db.prepare('INSERT INTO roles (name, level, scope, color) VALUES (?, ?, ?, ?)');
+        const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
+
+        const serverMod = insertRole.run('Server Mod', 50, 'server', '#3498db');
+        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','delete_own_messages','edit_own_messages']
+          .forEach(p => insertPerm.run(serverMod.lastInsertRowid, p));
+
+        const channelMod = insertRole.run('Channel Mod', 25, 'channel', '#2ecc71');
+        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','delete_lower_messages','upload_files','use_voice','view_history','delete_own_messages','edit_own_messages']
+          .forEach(p => insertPerm.run(channelMod.lastInsertRowid, p));
+
+        const userRole = insertRole.run('User', 1, 'server', '#95a5a6');
+        db.prepare('UPDATE roles SET auto_assign = 1 WHERE id = ?').run(userRole.lastInsertRowid);
+        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history']
+          .forEach(p => insertPerm.run(userRole.lastInsertRowid, p));
+
+        // Auto-assign the User role to all existing users
+        const autoRoles = db.prepare('SELECT id FROM roles WHERE auto_assign = 1 AND scope = ?').all('server');
+        for (const ar of autoRoles) {
+          db.prepare(`
+            INSERT OR IGNORE INTO user_roles (user_id, role_id, channel_id, granted_by)
+            SELECT u.id, ?, NULL, NULL FROM users u
+          `).run(ar.id);
+        }
+
+        for (const [code] of channelUsers) { emitOnlineUsers(code); }
+        io.emit('roles-updated');
+        cb({ success: true });
+      } catch (err) {
+        cb({ error: 'Failed to reset roles: ' + err.message });
+      }
     });
 
     // ═══════════════ CENTRALIZED ROLE ASSIGNMENT ═══════════

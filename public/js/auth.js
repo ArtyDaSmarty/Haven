@@ -31,13 +31,16 @@
 
   // ── Apply server default theme for first-time visitors ──
   // Only applies when the user has no personal theme preference stored locally.
-  if (!localStorage.getItem('haven_theme')) {
-    fetch('/api/public-config').then(r => r.json()).then(d => {
-      if (d.default_theme) {
-        document.documentElement.setAttribute('data-theme', d.default_theme);
-      }
-    }).catch(() => {});
-  }
+  // Also fetch server title for login page branding.
+  fetch('/api/public-config').then(r => r.json()).then(d => {
+    if (d.default_theme && !localStorage.getItem('haven_theme')) {
+      document.documentElement.setAttribute('data-theme', d.default_theme);
+    }
+    if (d.server_title) {
+      const titleEl = document.getElementById('server-title');
+      if (titleEl) titleEl.textContent = d.server_title;
+    }
+  }).catch(() => {});
 
   // ── EULA ─────────────────────────────────────────────
   const ageCheckbox  = document.getElementById('age-checkbox');
@@ -142,7 +145,7 @@
   // ── Admin Recovery ────────────────────────────────────
   document.getElementById('admin-recover-show').addEventListener('click', (e) => {
     e.preventDefault();
-    document.getElementById('admin-recover-link').style.display = 'none';
+    document.querySelector('.auth-recovery-links').style.display = 'none';
     document.getElementById('admin-recover-section').style.display = '';
   });
 
@@ -186,6 +189,8 @@
     recoverForm.style.display = 'none';
     loginForm.style.display = 'flex';
     document.querySelector('.auth-tabs').style.display = 'flex';
+    const recoveryLinks = document.querySelector('.auth-recovery-links');
+    if (recoveryLinks) recoveryLinks.style.display = '';
     hideError();
   }
 

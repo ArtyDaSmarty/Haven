@@ -258,6 +258,10 @@ _applyServerSettings() {
     if (nameInput && this.serverSettings.server_name !== undefined) {
       nameInput.value = this.serverSettings.server_name || '';
     }
+    const titleInput = document.getElementById('server-title-input');
+    if (titleInput && this.serverSettings.server_title !== undefined) {
+      titleInput.value = this.serverSettings.server_title || '';
+    }
     const cleanupEnabled = document.getElementById('cleanup-enabled');
     if (cleanupEnabled) {
       cleanupEnabled.checked = this.serverSettings.cleanup_enabled === 'true';
@@ -356,6 +360,7 @@ _syncSettingsNav() {
 _snapshotAdminSettings() {
   this._adminSnapshot = {
     server_name: this.serverSettings.server_name || 'HAVEN',
+    server_title: this.serverSettings.server_title || '',
     member_visibility: this.serverSettings.member_visibility || 'online',
     cleanup_enabled: this.serverSettings.cleanup_enabled || 'false',
     cleanup_max_age_days: this.serverSettings.cleanup_max_age_days || '0',
@@ -382,6 +387,12 @@ _saveAdminSettings() {
   const name = document.getElementById('server-name-input')?.value.trim() || 'HAVEN';
   if (name !== snap.server_name) {
     this.socket.emit('update-server-setting', { key: 'server_name', value: name });
+    changed = true;
+  }
+
+  const title = document.getElementById('server-title-input')?.value.trim() || '';
+  if (title !== (snap.server_title || '')) {
+    this.socket.emit('update-server-setting', { key: 'server_title', value: title });
     changed = true;
   }
 
@@ -447,6 +458,8 @@ _cancelAdminSettings() {
   if (snap) {
     const ni = document.getElementById('server-name-input');
     if (ni) ni.value = snap.server_name;
+    const ti = document.getElementById('server-title-input');
+    if (ti) ti.value = snap.server_title || '';
     const vis = document.getElementById('member-visibility-select');
     if (vis) vis.value = snap.member_visibility;
     const ce = document.getElementById('cleanup-enabled');
@@ -2185,6 +2198,17 @@ _initRoleManagement() {
 
   // Listen for role updates
   this.socket.on('roles-updated', () => this._loadRoles());
+
+  // Reset roles to default
+  document.getElementById('reset-roles-btn')?.addEventListener('click', () => {
+    if (!confirm('Reset all roles to deployment defaults?\n\nThis will delete all current roles and re-create the defaults (Server Mod, Channel Mod, User). Existing role assignments will be lost.')) return;
+    this.socket.emit('reset-roles-to-default', {}, (res) => {
+      if (res.error) { this._showToast(res.error, 'error'); return; }
+      this._showToast('Roles reset to defaults', 'success');
+      this._selectedRoleId = null;
+      this._loadRoles();
+    });
+  });
 
   // Initialize centralized role assignment 3-pane modal
   this._initRoleAssignCenter();

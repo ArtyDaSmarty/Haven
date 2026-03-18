@@ -1313,6 +1313,11 @@
             <span>Server Name</span>
             <input type="text" id="server-name-input" maxlength="32" class="settings-text-input" style="max-width:160px" placeholder="HAVEN">
           </label>
+          <label class="select-row">
+            <span>Login Title</span>
+            <input type="text" id="server-title-input" maxlength="40" class="settings-text-input" style="max-width:200px" placeholder="(shown on login page)">
+          </label>
+          <small class="settings-hint" style="margin-top:2px;display:block">Custom title displayed on the login screen below the HAVEN logo.</small>
           <div class="server-icon-upload-area">
             <div class="server-icon-preview" id="server-icon-preview">
               <span class="server-icon-text">⬡</span>
@@ -1447,8 +1452,9 @@
         <div class="admin-settings" id="section-roles" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
           <h5 class="settings-section-subtitle">👑 Role Management</h5>
           <small class="settings-hint">Create and manage roles. Assign roles to users from the user list context menu.</small>
-          <div style="margin-top:8px;">
+          <div style="margin-top:8px;display:flex;gap:6px">
             <button class="btn-sm btn-full btn-accent" id="open-role-editor-btn">⚙️ Manage Roles</button>
+            <button class="btn-sm" id="reset-roles-btn" title="Reset all roles to deployment defaults">🔄 Reset to Default</button>
           </div>
           <div id="roles-list-preview" style="margin-top:8px;">
           </div>

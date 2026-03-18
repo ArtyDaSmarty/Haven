@@ -285,6 +285,17 @@ async _setupPushNotifications() {
   const toggle = document.getElementById('push-notif-enabled');
   const statusEl = document.getElementById('push-notif-status');
 
+  // Haven Desktop provides native OS notifications via app-preload.js — hide the web-push section entirely
+  if (window.havenDesktop?.isDesktopApp) {
+    const section = document.getElementById('section-push');
+    if (section) section.style.display = 'none';
+    const navItem = document.querySelector('.settings-nav-item[data-target="section-push"]');
+    if (navItem) navItem.style.display = 'none';
+    if (toggle) toggle.disabled = true;
+    if (statusEl) statusEl.textContent = 'Using native desktop notifications';
+    return;
+  }
+
   // Wire dismiss button for push error modal
   document.getElementById('push-error-dismiss-btn')?.addEventListener('click', () => {
     document.getElementById('push-error-modal').style.display = 'none';
