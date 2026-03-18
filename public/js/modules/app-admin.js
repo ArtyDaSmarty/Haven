@@ -632,6 +632,24 @@ _renderBanList(bans) {
   });
 },
 
+_renderDeletedUsersList(entries) {
+  const list = document.getElementById('deleted-users-list');
+  if (!entries || entries.length === 0) {
+    list.innerHTML = '<p class="muted-text">No deleted users</p>';
+    return;
+  }
+  list.innerHTML = entries.map(e => `
+    <div class="ban-item">
+      <div class="ban-info">
+        <strong>${this._escapeHtml(e.display_name || e.username)}</strong>
+        ${e.display_name ? `<span class="ban-reason">@${this._escapeHtml(e.username)}</span>` : ''}
+        <span class="ban-reason">${e.reason ? this._escapeHtml(e.reason) : 'No reason'}</span>
+        <span class="ban-date">${new Date(e.deleted_at).toLocaleDateString()}${e.deleted_by_name ? ` by ${this._escapeHtml(e.deleted_by_name)}` : ''}</span>
+      </div>
+    </div>
+  `).join('');
+},
+
 // ═══════════════════════════════════════════════════════
 // MEMBER LIST (universal access, role-dependent actions)
 // ═══════════════════════════════════════════════════════

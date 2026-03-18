@@ -40,6 +40,9 @@ class VoiceManager {
     this._noiseGateAnalyser = null;
     this._vcDest = null;             // MediaStreamDestination node for mixing soundboard audio into VC
 
+    // Voice audio bitrate cap (0 = auto, otherwise kbps from server)
+    this.audioBitrate = 0;
+
     // RNNoise noise suppression state
     this._rnnoiseNode = null;        // AudioWorkletNode for RNNoise
     this._rnnoiseReady = false;      // true once WASM is loaded in the worklet
@@ -100,6 +103,8 @@ class VoiceManager {
   _setupSocketListeners() {
     // We just joined: create peer connections + send offers to all existing users
     this.socket.on('voice-existing-users', async (data) => {
+      // Apply audio bitrate cap from channel settings
+      this.audioBitrate = data.voiceBitrate || 0;
       for (const user of data.users) {
         await this._createPeer(user.id, user.username, true);
       }
@@ -189,6 +194,17 @@ class VoiceManager {
       if (this.webcamUsers.has(data.user.id)) {
         this.webcamUsers.delete(data.user.id);
         if (this.onWebcamStream) this.onWebcamStream(data.user.id, null);
+      }
+    });
+
+    // Channel voice bitrate was changed mid-session
+    this.socket.on('voice-bitrate-updated', (data) => {
+      if (data && data.code === this.currentChannel) {
+        this.audioBitrate = data.bitrate || 0;
+        // Reapply to all existing peer connections
+        for (const [, peer] of this.peers) {
+          this._applyAudioBitrate(peer.connection);
+        }
       }
     });
 
@@ -434,6 +450,7 @@ class VoiceManager {
     this.inVoice = false;
     this.isMuted = false;
     this.isDeafened = false;
+    this.audioBitrate = 0;
     this.screenSharers.clear();
     this.screenGainNodes.clear();
     this.webcamUsers.clear();
@@ -885,6 +902,29 @@ class VoiceManager {
     } catch (e) { /* setParameters not supported — adaptive bitrate remains */ }
   }
 
+  /**
+   * Cap the audio bitrate on voice senders for a given peer connection.
+   * audioBitrate is in kbps; convert to bps for setParameters.
+   * 0 = no cap (remove maxBitrate constraint).
+   */
+  _applyAudioBitrate(connection) {
+    if (!this.audioBitrate) return; // 0 = auto, nothing to cap
+    try {
+      const senders = connection.getSenders();
+      for (const sender of senders) {
+        if (sender.track && sender.track.kind === 'audio' &&
+            this.localStream && this.localStream.getAudioTracks().includes(sender.track)) {
+          const params = sender.getParameters();
+          if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}];
+          }
+          params.encodings[0].maxBitrate = this.audioBitrate * 1000;
+          sender.setParameters(params).catch(() => {});
+        }
+      }
+    } catch (e) { /* setParameters not supported */ }
+  }
+
   async _renegotiate(userId, connection) {
     try {
       const offer = await connection.createOffer();
@@ -909,6 +949,11 @@ class VoiceManager {
       this.localStream.getTracks().forEach(track => {
         connection.addTrack(track, this.localStream);
       });
+    }
+
+    // Apply audio bitrate cap if configured
+    if (this.audioBitrate > 0) {
+      this._applyAudioBitrate(connection);
     }
 
     // If we're screen sharing, add those tracks too

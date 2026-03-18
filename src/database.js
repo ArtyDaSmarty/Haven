@@ -705,6 +705,25 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_poll_votes_msg ON poll_votes(message_id);
   `);
 
+  // ── Migration: deleted_users log (audit trail for admin deletions) ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deleted_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      display_name TEXT DEFAULT NULL,
+      reason TEXT DEFAULT '',
+      deleted_by INTEGER REFERENCES users(id),
+      deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // ── Migration: per-channel voice bitrate cap ────────────
+  try {
+    db.prepare("SELECT voice_bitrate FROM channels LIMIT 0").get();
+  } catch {
+    db.exec("ALTER TABLE channels ADD COLUMN voice_bitrate INTEGER DEFAULT 0");
+  }
+
   return db;
 }
 

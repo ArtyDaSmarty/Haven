@@ -756,7 +756,7 @@ function setupSocketHandlers(io, db) {
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate
           FROM channels c
           WHERE c.is_dm = 0
           UNION
@@ -764,7 +764,7 @@ function setupSocketHandlers(io, db) {
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate
           FROM channels c
           JOIN channel_members cm ON c.id = cm.channel_id
           WHERE cm.user_id = ? AND c.is_dm = 1
@@ -781,7 +781,7 @@ function setupSocketHandlers(io, db) {
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate
           FROM channels c
           JOIN channel_members cm ON c.id = cm.channel_id
           WHERE cm.user_id = ?
@@ -1570,7 +1570,7 @@ function setupSocketHandlers(io, db) {
       if (!vMember) return socket.emit('error-msg', 'Not a member of this channel');
 
       // Check channel type and voice user limit
-      const vchSettings = db.prepare('SELECT voice_enabled, voice_user_limit FROM channels WHERE code = ?').get(code);
+      const vchSettings = db.prepare('SELECT voice_enabled, voice_user_limit, voice_bitrate FROM channels WHERE code = ?').get(code);
       if (vchSettings && vchSettings.voice_enabled === 0) {
         return socket.emit('error-msg', 'Voice is disabled in this channel');
       }
@@ -1606,7 +1606,8 @@ function setupSocketHandlers(io, db) {
       // Tell new user about existing peers (they'll create offers)
       socket.emit('voice-existing-users', {
         channelCode: code,
-        users: existingUsers.map(u => ({ id: u.id, username: u.username }))
+        users: existingUsers.map(u => ({ id: u.id, username: u.username })),
+        voiceBitrate: vchSettings ? (vchSettings.voice_bitrate || 0) : 0
       });
 
       // Tell existing users about new peer (they'll expect offers)
@@ -3060,8 +3061,14 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'You can\'t delete yourself');
       }
 
-      const targetUser = db.prepare('SELECT id, COALESCE(display_name, username) as username FROM users WHERE id = ?').get(data.userId);
+      const targetUser = db.prepare('SELECT id, username, display_name, COALESCE(display_name, username) as displayName FROM users WHERE id = ?').get(data.userId);
       if (!targetUser) return socket.emit('error-msg', 'User not found');
+
+      // Record the deletion for audit trail (before purging the user row)
+      const reason = typeof data.reason === 'string' ? data.reason.trim().slice(0, 500) : '';
+      db.prepare('INSERT INTO deleted_users (username, display_name, reason, deleted_by) VALUES (?, ?, ?, ?)').run(
+        targetUser.username, targetUser.display_name, reason, socket.user.id
+      );
 
       // Disconnect the user if online
       for (const [, s] of io.sockets.sockets) {
@@ -3120,7 +3127,14 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Failed to delete user');
       }
 
-      socket.emit('error-msg', `Deleted user "${targetUser.username}" — username is now available`);
+      socket.emit('error-msg', `Deleted user "${targetUser.displayName}" — username is now available`);
+
+      // Notify all admins so their member lists update in real time
+      for (const [, s] of io.sockets.sockets) {
+        if (s.user && s.user.isAdmin) {
+          s.emit('user-deleted', { userId: data.userId, username: targetUser.displayName });
+        }
+      }
 
       // Refresh ban list for admin
       const bans = db.prepare(`
@@ -3130,7 +3144,7 @@ function setupSocketHandlers(io, db) {
       bans.forEach(b => { b.created_at = utcStamp(b.created_at); });
       socket.emit('ban-list', bans);
 
-      console.log(`🗑️  Admin deleted user "${targetUser.username}" (id: ${data.userId})`);
+      console.log(`🗑️  Admin deleted user "${targetUser.displayName}" (id: ${data.userId})`);
     });
 
     // ═══════════════ SELF-DELETE ACCOUNT ═════════════════════
@@ -3305,6 +3319,19 @@ function setupSocketHandlers(io, db) {
       `).all();
       bans.forEach(b => { b.created_at = utcStamp(b.created_at); });
       socket.emit('ban-list', bans);
+    });
+
+    socket.on('get-deleted-users', () => {
+      if (!socket.user.isAdmin) return;
+      const rows = db.prepare(`
+        SELECT d.id, d.username, d.display_name, d.reason, d.deleted_at,
+               COALESCE(u.display_name, u.username) as deleted_by_name
+        FROM deleted_users d
+        LEFT JOIN users u ON d.deleted_by = u.id
+        ORDER BY d.deleted_at DESC
+      `).all();
+      rows.forEach(r => { r.deleted_at = utcStamp(r.deleted_at); });
+      socket.emit('deleted-users-list', rows);
     });
 
     // ═══════════════ SERVER SETTINGS ════════════════════════
@@ -5958,6 +5985,37 @@ function setupSocketHandlers(io, db) {
       } catch (err) {
         console.error('Set voice user limit error:', err);
         socket.emit('error-msg', 'Failed to set voice user limit');
+      }
+    });
+
+    // ── Set voice audio bitrate cap ─────────────────────────
+    socket.on('set-voice-bitrate', (data) => {
+      if (!data || typeof data !== 'object') return;
+      // Admin, server mod, or channel mod can change bitrate
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_channel')) {
+        return socket.emit('error-msg', 'You don\'t have permission to change voice bitrate');
+      }
+      const code = typeof data.code === 'string' ? data.code.trim() : '';
+      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
+
+      const bitrate = typeof data.bitrate === 'number' ? data.bitrate : parseInt(data.bitrate);
+      const validBitrates = [0, 32, 64, 96, 128, 256, 512];
+      if (!validBitrates.includes(bitrate)) {
+        return socket.emit('error-msg', 'Invalid bitrate value');
+      }
+
+      const channel = db.prepare('SELECT id FROM channels WHERE code = ? AND is_dm = 0').get(code);
+      if (!channel) return socket.emit('error-msg', 'Channel not found');
+
+      try {
+        db.prepare('UPDATE channels SET voice_bitrate = ? WHERE id = ?').run(bitrate, channel.id);
+        broadcastChannelLists();
+        // Notify all voice users so they can adjust their senders in real time
+        io.to(`voice:${code}`).emit('voice-bitrate-updated', { code, bitrate });
+        socket.emit('toast', { message: bitrate > 0 ? `🎙️ Voice bitrate set to ${bitrate} kbps` : '🎙️ Voice bitrate set to auto', type: 'success' });
+      } catch (err) {
+        console.error('Set voice bitrate error:', err);
+        socket.emit('error-msg', 'Failed to set voice bitrate');
       }
     });
 

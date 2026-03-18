@@ -948,6 +948,18 @@ _setupSocketListeners() {
     this._renderBanList(data);
   });
 
+  this.socket.on('deleted-users-list', (data) => {
+    this._renderDeletedUsersList(data);
+  });
+
+  this.socket.on('user-deleted', (data) => {
+    // Remove from cached members list so the popup updates without a full refresh
+    if (this._allMembersData) {
+      this._allMembersData = this._allMembersData.filter(m => m.id !== data.userId);
+      this._filterAllMembers();
+    }
+  });
+
   // ── Server settings ────────────────────────────────
   this.socket.on('server-settings', (settings) => {
     this.serverSettings = settings;

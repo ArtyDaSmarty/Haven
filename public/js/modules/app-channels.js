@@ -318,6 +318,12 @@ _updateChannelFunctionsPanel(ch) {
   // User limit greyed when voice is disabled
   const userLimitRow = document.querySelector('.cfn-row[data-fn="user-limit"]');
   if (userLimitRow) userLimitRow.classList.toggle('cfn-disabled', voiceOff);
+  // Voice Bitrate (0 = auto / no cap)
+  const bitrate = ch.voice_bitrate || 0;
+  this._setCfnBadge('voice-bitrate', bitrate > 0, bitrate > 0 ? bitrate + ' kbps' : 'Auto');
+  // Voice bitrate greyed when voice is disabled
+  const bitrateRow = document.querySelector('.cfn-row[data-fn="voice-bitrate"]');
+  if (bitrateRow) bitrateRow.classList.toggle('cfn-disabled', voiceOff);
   // Announcement channel
   const isAnnouncement = ch.notification_type === 'announcement';
   this._setCfnBadge('announcement', isAnnouncement, isAnnouncement ? 'ON' : 'OFF');

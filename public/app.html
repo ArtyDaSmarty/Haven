@@ -1370,6 +1370,7 @@
             </select>
           </label>
           <button class="btn-sm btn-full" id="view-bans-btn">📋 View Bans</button>
+          <button class="btn-sm btn-full" id="view-deleted-users-btn" style="margin-top:6px">🗑️ View Deleted Users</button>
           <button class="btn-sm btn-full" id="view-all-members-btn" style="margin-top:6px">👥 View All Members</button>
           <label class="toggle-row" style="margin-top:8px">
             <span>Update banner (admins only)</span>
@@ -1873,6 +1874,18 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="deleted-users-modal" style="display:none">
+    <div class="modal modal-wide">
+      <h3>🗑️ Deleted Users</h3>
+      <div id="deleted-users-list" class="bans-list">
+        <p class="muted-text">Loading...</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm" id="close-deleted-users-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- All Members Modal -->
   <div class="modal-overlay" id="all-members-modal" style="display:none">
     <div class="modal modal-wide" style="max-width:720px;max-height:85vh;display:flex;flex-direction:column">
@@ -1979,6 +1992,10 @@
       <div class="cfn-row" data-fn="user-limit" title="Limit simultaneous voice users (click to set; blank = unlimited)">
         <span class="cfn-label">👥 Voice Limit</span>
         <span class="cfn-badge cfn-off">∞</span>
+      </div>
+      <div class="cfn-row" data-fn="voice-bitrate" title="Cap voice audio bitrate in kbps (0 = auto / no cap)">
+        <span class="cfn-label">🎚️ Voice Bitrate</span>
+        <span class="cfn-badge cfn-off">Auto</span>
       </div>
       <div class="cfn-divider"></div>
       <div class="cfn-row" data-fn="self-destruct" title="Set a self-destruct timer — channel auto-deletes after the specified hours (0 = off)">

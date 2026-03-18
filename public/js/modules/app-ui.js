@@ -325,6 +325,32 @@ _setupUI() {
       };
       input.addEventListener('keydown', e2 => { if (e2.key === 'Enter') { commitLimit(); input.blur(); } });
       input.addEventListener('blur', commitLimit);
+    } else if (fn === 'voice-bitrate') {
+      if (row.querySelector('.cfn-input')) return;
+      const badge = row.querySelector('.cfn-badge');
+      if (!badge) return;
+      const current = (ch && ch.voice_bitrate) || 0;
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = '0'; input.max = '512';
+      input.value = current > 0 ? current : ''; input.placeholder = '32–512 (blank=auto)'; input.className = 'cfn-input';
+      input.onclick = e2 => e2.stopPropagation();
+      badge.replaceWith(input);
+      input.focus(); input.select();
+      const commitBitrate = () => {
+        const raw = parseInt(input.value);
+        const validBitrates = [0, 32, 64, 96, 128, 256, 512];
+        // Snap to nearest valid bitrate, or 0 if blank/invalid
+        let bitrate = 0;
+        if (!isNaN(raw) && raw > 0) {
+          bitrate = validBitrates.reduce((prev, curr) =>
+            Math.abs(curr - raw) < Math.abs(prev - raw) ? curr : prev
+          );
+        }
+        optimistic({ voice_bitrate: bitrate });
+        this.socket.emit('set-voice-bitrate', { code, bitrate });
+      };
+      input.addEventListener('keydown', e2 => { if (e2.key === 'Enter') { commitBitrate(); input.blur(); } });
+      input.addEventListener('blur', commitBitrate);
     } else if (fn === 'self-destruct') {
       if (row.querySelector('.cfn-input')) return;
       const badge = row.querySelector('.cfn-badge');
@@ -1567,7 +1593,7 @@ _setupUI() {
       this.socket.emit('mute-user', { userId, reason, duration });
     } else if (action === 'delete-user') {
       if (!confirm(`Are you SURE you want to delete ${this.adminActionTarget.username}? This cannot be undone.`)) return;
-      this.socket.emit('delete-user', { userId, scrubMessages });
+      this.socket.emit('delete-user', { userId, reason, scrubMessages });
     }
 
     document.getElementById('admin-action-modal').style.display = 'none';
@@ -2074,6 +2100,20 @@ _setupUI() {
   });
 
   document.getElementById('bans-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+  });
+
+  // View deleted users button
+  document.getElementById('view-deleted-users-btn').addEventListener('click', () => {
+    this.socket.emit('get-deleted-users');
+    document.getElementById('deleted-users-modal').style.display = 'flex';
+  });
+
+  document.getElementById('close-deleted-users-btn').addEventListener('click', () => {
+    document.getElementById('deleted-users-modal').style.display = 'none';
+  });
+
+  document.getElementById('deleted-users-modal').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
   });
 
