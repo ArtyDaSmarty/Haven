@@ -864,15 +864,19 @@ const BUILTIN_SOUNDS = [
   { name: 'AOL - Files Done',      url: '/sounds/aol_filesdone.mp3',   builtin: true },
 ];
 
-// ── Sound upload (admin only, wav/mp3/ogg, max 1 MB) ────
-const soundUpload = multer({
-  storage: uploadStorage,
-  limits: { fileSize: 1 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (/^audio\/(mpeg|ogg|wav|webm)$/.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Only audio files allowed (mp3, ogg, wav, webm)'));
-  }
-});
+// ── Sound upload (admin only, wav/mp3/ogg, configurable max size) ────
+function createSoundUpload() {
+  const { getDb } = require('./src/database');
+  const maxKb = parseInt(getDb().prepare('SELECT value FROM server_settings WHERE key = ?').get('max_sound_kb')?.value) || 1024;
+  return multer({
+    storage: uploadStorage,
+    limits: { fileSize: maxKb * 1024 },
+    fileFilter: (req, file, cb) => {
+      if (/^audio\/(mpeg|ogg|wav|webm)$/.test(file.mimetype)) cb(null, true);
+      else cb(new Error('Only audio files allowed (mp3, ogg, wav, webm)'));
+    }
+  });
+}
 
 app.post('/api/upload-sound', uploadLimiter, (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -880,7 +884,7 @@ app.post('/api/upload-sound', uploadLimiter, (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!verifyAdminFromDb(user) && !userHasPermission(user.id, 'manage_soundboard')) return res.status(403).json({ error: 'Requires admin or Manage Soundboard permission' });
 
-  soundUpload.single('sound')(req, res, (err) => {
+  createSoundUpload().single('sound')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -948,15 +952,19 @@ app.patch('/api/sounds/:name', (req, res) => {
   } catch { res.status(500).json({ error: 'Failed to rename sound' }); }
 });
 
-// ── Custom emoji upload (admin only, image, max 256 KB) ──
-const emojiUpload = multer({
-  storage: uploadStorage,
-  limits: { fileSize: 256 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (/^image\/(png|gif|webp|jpeg)$/.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Only images allowed (png, gif, webp, jpg)'));
-  }
-});
+// ── Custom emoji upload (admin only, image, configurable max size) ──
+function createEmojiUpload() {
+  const { getDb } = require('./src/database');
+  const maxKb = parseInt(getDb().prepare('SELECT value FROM server_settings WHERE key = ?').get('max_emoji_kb')?.value) || 256;
+  return multer({
+    storage: uploadStorage,
+    limits: { fileSize: maxKb * 1024 },
+    fileFilter: (req, file, cb) => {
+      if (/^image\/(png|gif|webp|jpeg)$/.test(file.mimetype)) cb(null, true);
+      else cb(new Error('Only images allowed (png, gif, webp, jpg)'));
+    }
+  });
+}
 
 app.post('/api/upload-emoji', uploadLimiter, (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -964,7 +972,7 @@ app.post('/api/upload-emoji', uploadLimiter, (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!verifyAdminFromDb(user) && !userHasPermission(user.id, 'manage_emojis')) return res.status(403).json({ error: 'Requires admin or Manage Emojis permission' });
 
-  emojiUpload.single('emoji')(req, res, (err) => {
+  createEmojiUpload().single('emoji')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 

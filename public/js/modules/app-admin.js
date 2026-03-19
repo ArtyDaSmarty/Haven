@@ -290,6 +290,18 @@ _applyServerSettings() {
     if (maxUpload) {
       maxUpload.value = this.serverSettings.max_upload_mb || '25';
     }
+    const maxSoundKb = document.getElementById('max-sound-kb');
+    if (maxSoundKb) {
+      maxSoundKb.value = this.serverSettings.max_sound_kb || '1024';
+    }
+    const maxEmojiKb = document.getElementById('max-emoji-kb');
+    if (maxEmojiKb) {
+      maxEmojiKb.value = this.serverSettings.max_emoji_kb || '256';
+    }
+    const maxPollOpts = document.getElementById('max-poll-options');
+    if (maxPollOpts) {
+      maxPollOpts.value = this.serverSettings.max_poll_options || '10';
+    }
     const whitelistToggle = document.getElementById('whitelist-enabled');
     if (whitelistToggle) {
       whitelistToggle.checked = this.serverSettings.whitelist_enabled === 'true';
@@ -389,6 +401,9 @@ _snapshotAdminSettings() {
     cleanup_max_size_mb: this.serverSettings.cleanup_max_size_mb || '0',
     whitelist_enabled: this.serverSettings.whitelist_enabled || 'false',
     max_upload_mb: this.serverSettings.max_upload_mb || '25',
+    max_sound_kb: this.serverSettings.max_sound_kb || '1024',
+    max_emoji_kb: this.serverSettings.max_emoji_kb || '256',
+    max_poll_options: this.serverSettings.max_poll_options || '10',
     update_banner_admin_only: this.serverSettings.update_banner_admin_only || 'false',
     default_theme: this.serverSettings.default_theme || ''
   };
@@ -455,6 +470,24 @@ _saveAdminSettings() {
     changed = true;
   }
 
+  const maxSoundKb = String(Math.max(256, Math.min(10240, parseInt(document.getElementById('max-sound-kb')?.value) || 1024)));
+  if (maxSoundKb !== (snap.max_sound_kb || '1024')) {
+    this.socket.emit('update-server-setting', { key: 'max_sound_kb', value: maxSoundKb });
+    changed = true;
+  }
+
+  const maxEmojiKb = String(Math.max(64, Math.min(1024, parseInt(document.getElementById('max-emoji-kb')?.value) || 256)));
+  if (maxEmojiKb !== (snap.max_emoji_kb || '256')) {
+    this.socket.emit('update-server-setting', { key: 'max_emoji_kb', value: maxEmojiKb });
+    changed = true;
+  }
+
+  const maxPollOpts = String(Math.max(2, Math.min(25, parseInt(document.getElementById('max-poll-options')?.value) || 10)));
+  if (maxPollOpts !== (snap.max_poll_options || '10')) {
+    this.socket.emit('update-server-setting', { key: 'max_poll_options', value: maxPollOpts });
+    changed = true;
+  }
+
   const updateBannerAdminOnly = document.getElementById('update-banner-admin-only')?.checked ? 'true' : 'false';
   if (updateBannerAdminOnly !== (snap.update_banner_admin_only || 'false')) {
     this.socket.emit('update-server-setting', { key: 'update_banner_admin_only', value: updateBannerAdminOnly });
@@ -494,6 +527,12 @@ _cancelAdminSettings() {
     if (wl) wl.checked = snap.whitelist_enabled === 'true';
     const mu = document.getElementById('max-upload-mb');
     if (mu) mu.value = snap.max_upload_mb || '25';
+    const msk = document.getElementById('max-sound-kb');
+    if (msk) msk.value = snap.max_sound_kb || '1024';
+    const mek = document.getElementById('max-emoji-kb');
+    if (mek) mek.value = snap.max_emoji_kb || '256';
+    const mpo = document.getElementById('max-poll-options');
+    if (mpo) mpo.value = snap.max_poll_options || '10';
     const uba = document.getElementById('update-banner-admin-only');
     if (uba) uba.checked = snap.update_banner_admin_only === 'true';
     const dt = document.getElementById('default-theme-select');

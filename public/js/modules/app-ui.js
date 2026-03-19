@@ -3037,7 +3037,8 @@ _addPollOptionRow(list, index) {
 
 _addPollOption() {
   const list = document.getElementById('poll-options-list');
-  if (list.children.length >= 10) return;
+  const maxOpts = parseInt(this.serverSettings?.max_poll_options) || 10;
+  if (list.children.length >= maxOpts) return;
   this._addPollOptionRow(list, list.children.length);
   const inputs = list.querySelectorAll('.poll-option-input');
   inputs[inputs.length - 1].focus();

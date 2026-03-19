@@ -333,7 +333,8 @@ _setupSoundManagement() {
       const name = nameInput ? nameInput.value.trim() : '';
       if (!file) return this._showToast('Select an audio file', 'error');
       if (!name) return this._showToast('Enter a sound name', 'error');
-      if (file.size > 1024 * 1024) return this._showToast('Sound file too large (max 1 MB)', 'error');
+      const maxSoundKb = parseInt(this.serverSettings?.max_sound_kb) || 1024;
+      if (file.size > maxSoundKb * 1024) return this._showToast(`Sound file too large (max ${maxSoundKb >= 1024 ? (maxSoundKb / 1024) + ' MB' : maxSoundKb + ' KB'})`, 'error');
 
       const formData = new FormData();
       formData.append('sound', file);
@@ -949,7 +950,8 @@ _setupEmojiManagement() {
     const uploadBlob = (this._croppedEmojiBlob && file.type !== 'image/gif')
       ? this._croppedEmojiBlob
       : file;
-    if (uploadBlob.size > 256 * 1024) return this._showToast('Emoji file too large (max 256 KB)', 'error');
+    const maxEmojiKb = parseInt(this.serverSettings?.max_emoji_kb) || 256;
+    if (uploadBlob.size > maxEmojiKb * 1024) return this._showToast(`Emoji file too large (max ${maxEmojiKb} KB)`, 'error');
 
     const formData = new FormData();
     formData.append('emoji', uploadBlob, file.name);

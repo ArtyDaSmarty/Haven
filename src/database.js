@@ -204,6 +204,9 @@ function initDatabase() {
   insertSetting.run('permission_thresholds', '{"create_channel":50}');    // JSON: { permission: minLevel } — auto-grant perms at level
   insertSetting.run('server_code', '');                // server-wide invite code (joins all channels)
   insertSetting.run('max_upload_mb', '25');             // max file upload size in MB
+  insertSetting.run('max_poll_options', '10');            // max poll answer options (2–25)
+  insertSetting.run('max_sound_kb', '1024');              // max soundboard file size in KB (256–10240)
+  insertSetting.run('max_emoji_kb', '256');               // max emoji file size in KB (64–1024)
   insertSetting.run('setup_wizard_complete', 'false');   // first-time admin setup wizard
   insertSetting.run('update_banner_admin_only', 'false'); // hide update banner from non-admins
 

@@ -2177,10 +2177,11 @@ function setupSocketHandlers(io, db) {
         if (!data || typeof data !== 'object') return;
         const question = typeof data.question === 'string' ? data.question.trim() : '';
         if (!question || question.length > 300) return;
+        const maxPollOpts = parseInt(db.prepare('SELECT value FROM server_settings WHERE key = ?').get('max_poll_options')?.value) || 10;
         const options = Array.isArray(data.options) ? data.options : [];
-        if (options.length < 2 || options.length > 10) return;
+        if (options.length < 2 || options.length > maxPollOpts) return;
         const cleanOptions = options.map(o => typeof o === 'string' ? sanitizeText(o.trim()) : '').filter(Boolean);
-        if (cleanOptions.length < 2 || cleanOptions.length > 10) return;
+        if (cleanOptions.length < 2 || cleanOptions.length > maxPollOpts) return;
         if (cleanOptions.some(o => o.length > 100)) return;
         const multiVote = !!data.multiVote;
         const anonymous = !!data.anonymous;
@@ -3484,7 +3485,7 @@ function setupSocketHandlers(io, db) {
       const key = typeof data.key === 'string' ? data.key.trim() : '';
       const value = typeof data.value === 'string' ? data.value.trim() : '';
 
-      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'setup_wizard_complete', 'update_banner_admin_only', 'default_theme'];
+      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'max_poll_options', 'max_sound_kb', 'max_emoji_kb', 'setup_wizard_complete', 'update_banner_admin_only', 'default_theme'];
       if (!allowedKeys.includes(key)) return;
 
       if (key === 'member_visibility' && !['all', 'online', 'none'].includes(value)) return;
@@ -3500,6 +3501,18 @@ function setupSocketHandlers(io, db) {
       if (key === 'max_upload_mb') {
         const n = parseInt(value);
         if (isNaN(n) || n < 1 || n > 2048) return;
+      }
+      if (key === 'max_poll_options') {
+        const n = parseInt(value);
+        if (isNaN(n) || n < 2 || n > 25) return;
+      }
+      if (key === 'max_sound_kb') {
+        const n = parseInt(value);
+        if (isNaN(n) || n < 256 || n > 10240) return;
+      }
+      if (key === 'max_emoji_kb') {
+        const n = parseInt(value);
+        if (isNaN(n) || n < 64 || n > 1024) return;
       }
       if (key === 'giphy_api_key') {
         // Allow empty value to clear the key, otherwise validate format
