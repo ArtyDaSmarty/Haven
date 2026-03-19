@@ -11,6 +11,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Haven uses [Sema
 
 ---
 
+## [2.8.0] — 2026-03-18
+
+### Added
+- **Expanded permissions system** — three new delegatable permissions: `manage_roles` (edit/assign roles), `manage_server` (branding, whitelist, invite, cleanup, upload limit, tunneling), and `delete_channel`. Non-admins with these permissions can manage the server without full admin access. Includes server-side escalation guard preventing users from granting permissions they don't have. Based on community contribution by @Jaymus3 (#150).
+- **Deleted users list** (#180) — admins can now view a list of deleted accounts in the admin panel.
+- **Configurable voice bitrate** (#179) — voice chat bitrate is now adjustable in settings.
+
+### Fixed
+- **Clipboard copy buttons silent failure in Desktop app** (#182) — `navigator.clipboard.writeText()` fails silently in Electron BrowserView. All copy buttons (channel code, server code, webhook URL, wizard code, E2E safety code, tunnel URL, bot manager) now fall back to `execCommand('copy')` when the Clipboard API is unavailable.
+
+---
+
 ## [2.7.9] — 2026-03-17
 
 ### Added
