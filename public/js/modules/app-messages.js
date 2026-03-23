@@ -89,6 +89,32 @@ async _sendMessage() {
     const isDm = ch && ch.is_dm && ch.dm_target;
     let partner = this._getE2EPartner();
 
+    // Pre-process content-transforming slash commands client-side so they
+    // survive E2E encryption (server can't parse encrypted slash commands)
+    if (isDm) {
+      const slashMatch = content.trim().match(/^\/([a-zA-Z]+)(?:\s+(.*))?$/);
+      if (slashMatch) {
+        const cmd = slashMatch[1].toLowerCase();
+        const arg = (slashMatch[2] || '').trim();
+        const displayName = this.user.displayName || this.user.username;
+        const clientSlash = {
+          spoiler:   () => arg ? `||${arg}||` : null,
+          shrug:     () => `${arg ? arg + ' ' : ''}¯\\_(ツ)_/¯`,
+          tableflip: () => `${arg ? arg + ' ' : ''}(╯°□°)╯︵ ┻━┻`,
+          unflip:    () => `${arg ? arg + ' ' : ''}┬─┬ ノ( ゜-゜ノ)`,
+          lenny:     () => `${arg ? arg + ' ' : ''}( ͡° ͜ʖ ͡°)`,
+          me:        () => arg ? `_${displayName} ${arg}_` : null,
+        };
+        if (clientSlash[cmd]) {
+          const transformed = clientSlash[cmd]();
+          if (transformed !== null) {
+            payload.content = transformed;
+            content = transformed;
+          }
+        }
+      }
+    }
+
     // If DM but partner key not yet cached, request it via promise
     if (isDm && !partner && this.e2e && this.e2e.ready) {
       const jwk = await this.e2e.requestPartnerKey(this.socket, ch.dm_target.id);

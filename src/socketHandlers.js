@@ -6437,7 +6437,12 @@ function setupSocketHandlers(io, db) {
         afk:       () => ({ content: `💤 ${username} is away from keyboard` }),
         me:        () => arg ? ({ content: `_${username} ${arg}_` }) : null,
         spoiler:   () => arg ? ({ content: `||${arg}||` }) : null,
-        tts:       () => arg ? ({ content: arg, tts: true }) : null,
+        tts:       () => {
+          if (!arg) return null;
+          // Cap TTS content length to prevent abuse
+          const ttsContent = arg.length > 500 ? arg.slice(0, 500) + '…' : arg;
+          return { content: ttsContent, tts: true };
+        },
         flip:      () => ({ content: `🪙 ${username} flipped a coin: **${Math.random() < 0.5 ? 'Heads' : 'Tails'}**!` }),
         roll:      () => {
           const m = (arg || '1d6').match(/^(\d{1,2})?d(\d{1,4})$/i);
