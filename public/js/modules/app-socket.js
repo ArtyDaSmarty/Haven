@@ -16,6 +16,12 @@ _setupSocketListeners() {
     }
   });
 
+  this.socket.on('forum-post-deleted', (data) => {
+    if (data?.parentCode && data.parentCode === this._forumView?.parentCode) {
+      this.socket.emit('get-forum-overview', { code: data.parentCode });
+    }
+  });
+
   // Authoritative user info pushed by server on every connect
   this.socket.on('session-info', (data) => {
     this.user = { ...this.user, ...data };
