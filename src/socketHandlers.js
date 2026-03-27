@@ -6,7 +6,13 @@ const bcrypt = require('bcryptjs');
 const webpush = require('web-push');
 const { sendFcm, isFcmEnabled } = require('./fcm');
 const { DATA_DIR, UPLOADS_DIR, DELETED_ATTACHMENTS_DIR } = require('./paths');
-const { moveUploadToDeleted, STORAGE_KEYS } = require('./storage');
+const {
+  hasSecureSetting,
+  moveUploadToDeleted,
+  SECURE_STORAGE_KEYS,
+  setSecureSetting,
+  STORAGE_KEYS
+} = require('./storage');
 const HAVEN_VERSION = require('../package.json').version;
 
 // ── Normalize SQLite timestamps to UTC ISO 8601 ────────
@@ -3545,14 +3551,29 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ SERVER SETTINGS ════════════════════════
 
+    const canManageServerSettings = (sock) => !!(sock?.user && (sock.user.isAdmin || userHasPermission(sock.user.id, 'manage_server')));
+
+    const emitSettingToPrivilegedClients = (key, value) => {
+      for (const sock of io.sockets.sockets.values()) {
+        if (!canManageServerSettings(sock)) continue;
+        sock.emit('server-setting-changed', { key, value });
+      }
+    };
+
     socket.on('get-server-settings', () => {
       const rows = db.prepare('SELECT key, value FROM server_settings').all();
       const settings = {};
-      const sensitiveKeys = ['giphy_api_key', 'server_code', 'storage_s3_access_key', 'storage_s3_secret_key'];
+      const privileged = canManageServerSettings(socket);
+      const sensitiveKeys = ['giphy_api_key', 'server_code'];
       rows.forEach(r => {
-        if (sensitiveKeys.includes(r.key) && !socket.user.isAdmin) return;
+        if (SECURE_STORAGE_KEYS.includes(r.key)) return;
+        if (sensitiveKeys.includes(r.key) && !privileged) return;
         settings[r.key] = r.value;
       });
+      if (privileged) {
+        settings.storage_s3_access_key_configured = hasSecureSetting('storage_s3_access_key', db) ? 'true' : 'false';
+        settings.storage_s3_secret_key_configured = hasSecureSetting('storage_s3_secret_key', db) ? 'true' : 'false';
+      }
       socket.emit('server-settings', settings);
     });
 
@@ -3781,16 +3802,31 @@ function setupSocketHandlers(io, db) {
       }
 
       try {
-        db.prepare(
-          'INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)'
-        ).run(key, value);
+        if (SECURE_STORAGE_KEYS.includes(key)) {
+          if (!value) {
+            emitSettingToPrivilegedClients(`${key}_configured`, hasSecureSetting(key, db) ? 'true' : 'false');
+            return;
+          }
+          setSecureSetting(key, value, db);
+        } else {
+          db.prepare(
+            'INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)'
+          ).run(key, value);
+        }
       } catch (err) {
         console.error('Failed to save server setting:', key, err.message);
         return socket.emit('error-msg', 'Failed to save setting — database write error');
       }
 
-      // Broadcast to all connected clients
-      io.emit('server-setting-changed', { key, value });
+      if (SECURE_STORAGE_KEYS.includes(key)) {
+        emitSettingToPrivilegedClients(`${key}_configured`, 'true');
+      } else if (key === 'server_code') {
+        emitSettingToPrivilegedClients(key, value);
+      } else if (key === 'giphy_api_key') {
+        socket.emit('server-setting-changed', { key, value });
+      } else {
+        io.emit('server-setting-changed', { key, value });
+      }
 
       // If visibility changed, re-emit online users for all channels
       if (key === 'member_visibility') {
@@ -3808,7 +3844,7 @@ function setupSocketHandlers(io, db) {
       }
       const code = generateChannelCode();
       db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', code);
-      io.emit('server-setting-changed', { key: 'server_code', value: code });
+      emitSettingToPrivilegedClients('server_code', code);
       socket.emit('error-msg', `Server invite code generated: ${code}`);
     });
 
@@ -3817,7 +3853,7 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Only admins can manage server codes');
       }
       db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', '');
-      io.emit('server-setting-changed', { key: 'server_code', value: '' });
+      emitSettingToPrivilegedClients('server_code', '');
       socket.emit('error-msg', 'Server invite code cleared');
     });
 
