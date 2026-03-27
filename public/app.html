@@ -1021,6 +1021,7 @@
           <div class="settings-nav-item settings-nav-admin" data-target="section-invite" style="display:none">🌐 Invite Code</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-cleanup" style="display:none">🗑️ Cleanup</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-uploads" style="display:none">📁 Limits</div>
+          <div class="settings-nav-item settings-nav-admin" data-target="section-storage" style="display:none">☁️ Storage</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-sounds-admin" style="display:none">🔊 Sounds</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-emojis" style="display:none">😎 Emojis</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-roles" style="display:none">👑 Roles</div>
@@ -1605,6 +1606,34 @@
         <div class="admin-settings" id="section-uploads" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
           <h5 class="settings-section-subtitle">📁 Uploads &amp; Limits</h5>
           <label class="select-row">
+            <span>Max Upload Size (MB)</span>
+            <input type="number" id="max-upload-mb" min="1" max="2048" value="25" class="settings-number-input">
+          </label>
+          <small class="settings-hint">Maximum file size users can upload (1–2048 MB, default 25)</small>
+          <label class="select-row" style="margin-top:8px">
+            <span>Max Sound File Size (KB)</span>
+            <input type="number" id="max-sound-kb" min="256" max="10240" value="1024" class="settings-number-input">
+          </label>
+          <small class="settings-hint">Max soundboard upload size (256–10240 KB, default 1024 / 1 MB)</small>
+          <label class="select-row" style="margin-top:8px">
+            <span>Max Emoji File Size (KB)</span>
+            <input type="number" id="max-emoji-kb" min="64" max="1024" value="256" class="settings-number-input">
+          </label>
+          <small class="settings-hint">Max custom emoji upload size (64–1024 KB, default 256)</small>
+          <label class="select-row" style="margin-top:8px">
+            <span>Max Poll Options</span>
+            <input type="number" id="max-poll-options" min="2" max="25" value="10" class="settings-number-input">
+          </label>
+          <small class="settings-hint">Maximum answer choices per poll (2–25, default 10)</small>
+          <label class="select-row" style="margin-top:8px">
+            <span>Max Proxy Avatar Size (KB)</span>
+            <input type="number" id="max-proxy-avatar-kb" min="32" max="2048" value="256" class="settings-number-input">
+          </label>
+          <small class="settings-hint">Maximum proxy avatar upload size (32-2048 KB, default 256)</small>
+        </div>
+        <div class="admin-settings" id="section-storage" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+          <h5 class="settings-section-subtitle">☁️ Storage</h5>
+          <label class="select-row">
             <span>Active Upload Volume</span>
             <select id="storage-provider-select">
               <option value="local">Local /data/uploads</option>
@@ -1656,31 +1685,6 @@
             </div>
             <small class="settings-hint" id="storage-status-note" style="display:block;margin-top:8px"></small>
           </div>
-          <label class="select-row">
-            <span>Max Upload Size (MB)</span>
-            <input type="number" id="max-upload-mb" min="1" max="2048" value="25" class="settings-number-input">
-          </label>
-          <small class="settings-hint">Maximum file size users can upload (1–2048 MB, default 25)</small>
-          <label class="select-row" style="margin-top:8px">
-            <span>Max Sound File Size (KB)</span>
-            <input type="number" id="max-sound-kb" min="256" max="10240" value="1024" class="settings-number-input">
-          </label>
-          <small class="settings-hint">Max soundboard upload size (256–10240 KB, default 1024 / 1 MB)</small>
-          <label class="select-row" style="margin-top:8px">
-            <span>Max Emoji File Size (KB)</span>
-            <input type="number" id="max-emoji-kb" min="64" max="1024" value="256" class="settings-number-input">
-          </label>
-          <small class="settings-hint">Max custom emoji upload size (64–1024 KB, default 256)</small>
-          <label class="select-row" style="margin-top:8px">
-            <span>Max Poll Options</span>
-            <input type="number" id="max-poll-options" min="2" max="25" value="10" class="settings-number-input">
-          </label>
-          <small class="settings-hint">Maximum answer choices per poll (2–25, default 10)</small>
-          <label class="select-row" style="margin-top:8px">
-            <span>Max Proxy Avatar Size (KB)</span>
-            <input type="number" id="max-proxy-avatar-kb" min="32" max="2048" value="256" class="settings-number-input">
-          </label>
-          <small class="settings-hint">Maximum proxy avatar upload size (32-2048 KB, default 256)</small>
         </div>
         <div class="admin-settings" id="section-sounds-admin" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
           <h5 class="settings-section-subtitle">🔊 Custom Sounds</h5>
