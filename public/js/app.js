@@ -178,6 +178,7 @@ class HavenApp {
     this._setupSoundManagement();
     this._setupEmojiManagement();
     this._setupWebhookManagement();
+    this._setupStorageAdmin();
     this._setupDiscordImport();
     this._initRoleManagement();
     this._initServerBranding();
