@@ -1469,6 +1469,29 @@ _setupFontSizePicker() {
   });
 },
 
+// ── Emoji Reaction Size Picker ──
+
+_setupEmojiSizePicker() {
+  const picker = document.getElementById('emoji-size-picker');
+  if (!picker) return;
+
+  const saved = localStorage.getItem('haven-emojisize') || 'normal';
+  document.documentElement.dataset.emojisize = saved;
+  picker.querySelectorAll('[data-emojisize]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.emojisize === saved);
+  });
+
+  picker.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-emojisize]');
+    if (!btn) return;
+    const size = btn.dataset.emojisize;
+    document.documentElement.dataset.emojisize = size;
+    localStorage.setItem('haven-emojisize', size);
+    picker.querySelectorAll('[data-emojisize]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+},
+
 // ── Image Display Mode Picker ──
 
 _setupImageModePicker() {

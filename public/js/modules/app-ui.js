@@ -1064,6 +1064,10 @@ _setupUI() {
   this.voice.onScreenShareStarted = (userId, username) => {
     this.notifications.playDirect('stream_start');
   };
+  // Re-render voice user list when webcam status changes
+  this.voice.onWebcamStatusChange = () => {
+    if (this._lastVoiceUsers) this._renderVoiceUsers(this._lastVoiceUsers);
+  };
 
   // Wire up talking indicator
   this.voice.onTalkingChange = (userId, isTalking) => {
@@ -1362,6 +1366,19 @@ _setupUI() {
   document.getElementById('reply-close-btn').addEventListener('click', () => {
     this._clearReply();
   });
+
+  // Messages container — move-selection mode intercept
+  document.getElementById('messages').addEventListener('click', (e) => {
+    if (!this._moveSelectionActive) return;
+    // Don't intercept toolbar button clicks
+    if (e.target.closest('.msg-toolbar, .msg-dots-btn')) return;
+    const msgEl = e.target.closest('.message, .message-compact');
+    if (msgEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._toggleMoveSelect(msgEl);
+    }
+  }, true); // capture phase so it fires before the toolbar action handler
 
   // Messages container — delegate reaction and reply button clicks
   document.getElementById('messages').addEventListener('click', (e) => {

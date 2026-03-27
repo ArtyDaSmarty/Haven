@@ -870,6 +870,30 @@ _setupSocketListeners() {
     }
   });
 
+  // ── Messages moved (source channel) ──────────────
+  this.socket.on('messages-moved', (data) => {
+    if (data.channelCode === this.currentChannel) {
+      for (const id of data.messageIds) {
+        const msgEl = document.querySelector(`[data-msg-id="${id}"]`);
+        if (msgEl) {
+          const next = msgEl.nextElementSibling;
+          if (next && next.classList.contains('message-compact')) {
+            try { this._promoteCompactToFull(next); } catch {}
+          }
+          msgEl.remove();
+        }
+      }
+    }
+  });
+
+  // ── Messages received (destination channel) ──────
+  this.socket.on('messages-received', (data) => {
+    if (data.channelCode === this.currentChannel) {
+      // Reload the channel to show the moved messages in correct order
+      this.socket.emit('join-channel', { code: this.currentChannel }, () => {});
+    }
+  });
+
   // ── Pin / Unpin ──────────────────────────────────
   this.socket.on('message-pinned', (data) => {
     if (data.channelCode === this.currentChannel) {

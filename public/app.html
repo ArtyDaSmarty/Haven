@@ -283,6 +283,7 @@
             <span class="header-actions-divider"></span>
             <button id="search-toggle-btn" class="icon-btn small" title="Search messages (Ctrl+F)">🔍</button>
             <button id="pinned-toggle-btn" class="icon-btn small" title="Pinned messages">📌</button>
+            <button id="move-select-btn" class="icon-btn small" title="Select messages to move" style="display:none">☰</button>
             <div class="e2e-menu-wrapper" style="display:none" id="e2e-menu-wrapper">
               <button id="e2e-menu-btn" class="icon-btn small" title="Encryption options">🔐</button>
               <div class="e2e-dropdown" id="e2e-dropdown" style="display:none">
@@ -656,6 +657,25 @@
 
   <!-- Toast notifications -->
   <div id="toast-container"></div>
+
+  <!-- Move Messages Toolbar (floating above messages) -->
+  <div id="move-msg-toolbar" class="move-msg-toolbar" style="display:none">
+    <span id="move-msg-count">0 selected</span>
+    <button class="btn-sm btn-accent" id="move-msg-move-btn">Move to...</button>
+    <button class="btn-sm" id="move-msg-cancel-btn">Cancel</button>
+  </div>
+
+  <!-- Move Messages Channel Picker Modal -->
+  <div class="modal-overlay" id="move-msg-modal" style="display:none">
+    <div class="modal">
+      <h3>Move Messages</h3>
+      <p class="modal-desc" id="move-msg-desc">Select a destination channel</p>
+      <div class="move-msg-channel-list" id="move-msg-channel-list"></div>
+      <div class="modal-actions">
+        <button class="btn-sm" id="move-msg-modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- First-Time Setup Wizard (Admin only) -->
   <div class="modal-overlay" id="setup-wizard-modal" style="display:none">
@@ -1060,6 +1080,29 @@
           </button>
           <button type="button" class="density-btn" data-fontsize="x-large" title="Extra Large — 20px base">
             <span class="density-icon" style="font-size:20px">A</span>
+            <span class="density-label">XL</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Emoji Reaction Size -->
+      <div class="settings-section" id="section-emoji-size" style="border-top: 1px solid var(--border-light); padding-top: 16px; margin-top: 8px;">
+        <h5 class="settings-section-title">😀 Reaction Size</h5>
+        <div class="font-size-picker" id="emoji-size-picker">
+          <button type="button" class="density-btn" data-emojisize="small" title="Small reactions">
+            <span class="density-icon" style="font-size:11px">😀</span>
+            <span class="density-label">Small</span>
+          </button>
+          <button type="button" class="density-btn active" data-emojisize="normal" title="Normal reactions (default)">
+            <span class="density-icon" style="font-size:14px">😀</span>
+            <span class="density-label">Normal</span>
+          </button>
+          <button type="button" class="density-btn" data-emojisize="large" title="Large reactions">
+            <span class="density-icon" style="font-size:18px">😀</span>
+            <span class="density-label">Large</span>
+          </button>
+          <button type="button" class="density-btn" data-emojisize="x-large" title="Extra large reactions">
+            <span class="density-icon" style="font-size:22px">😀</span>
             <span class="density-label">XL</span>
           </button>
         </div>

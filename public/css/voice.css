@@ -329,6 +329,11 @@
   color: var(--text-muted, #888);
   font-size: 11px;
 }
+.voice-stream-badge.webcam {
+  background: rgba(80,180,255,0.15);
+  color: #5ab4ff;
+  font-size: 11px;
+}
 @keyframes live-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }

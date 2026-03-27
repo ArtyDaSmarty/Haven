@@ -434,12 +434,14 @@ function setupSocketHandlers(io, db) {
       socket.user.avatar = (uRow && uRow.avatar) ? uRow.avatar : null;
       socket.user.avatar_shape = (uRow && uRow.avatar_shape) ? uRow.avatar_shape : 'circle';
       if (uRow) {
-        // Sync admin status from .env (handles ADMIN_USERNAME changes)
-        const shouldBeAdmin = uRow.username.toLowerCase() === ADMIN_USERNAME ? 1 : 0;
-        if (uRow.is_admin !== shouldBeAdmin) {
-          db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(shouldBeAdmin, user.id);
+        // Bootstrap admin from ADMIN_USERNAME env only when NO admin exists
+        // (first run or recovery). Prevents overriding explicit admin transfers.
+        const anyAdmin = db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
+        if (!anyAdmin && uRow.username.toLowerCase() === ADMIN_USERNAME && !uRow.is_admin) {
+          db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id);
+          uRow.is_admin = 1;
         }
-        socket.user.isAdmin = !!shouldBeAdmin;
+        socket.user.isAdmin = !!uRow.is_admin;
       }
     } catch {
       socket.user.displayName = user.displayName || user.username;
@@ -908,7 +910,7 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Channel name too long (max 50)');
       }
       // Only allow safe characters in channel names
-      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
+      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
         return socket.emit('error-msg', 'Channel name contains invalid characters');
       }
 
@@ -2660,7 +2662,7 @@ function setupSocketHandlers(io, db) {
       if (!channel) return;
 
       const msg = db.prepare(
-        'SELECT id, user_id FROM messages WHERE id = ? AND channel_id = ?'
+        'SELECT id, user_id, content FROM messages WHERE id = ? AND channel_id = ?'
       ).get(data.messageId, channel.id);
       if (!msg) return;
 
@@ -2717,6 +2719,67 @@ function setupSocketHandlers(io, db) {
         channelCode: code,
         messageId: data.messageId
       });
+    });
+
+    // ═══════════════ MOVE MESSAGES ══════════════════════════
+
+    socket.on('move-messages', (data, callback) => {
+      if (!data || typeof data !== 'object') return;
+      const cb = typeof callback === 'function' ? callback : () => {};
+
+      const messageIds = Array.isArray(data.messageIds) ? data.messageIds.filter(id => isInt(id)) : [];
+      if (messageIds.length === 0 || messageIds.length > 200) return cb({ error: 'Select between 1 and 200 messages' });
+
+      const fromCode = typeof data.fromChannel === 'string' ? data.fromChannel.trim() : '';
+      const toCode   = typeof data.toChannel   === 'string' ? data.toChannel.trim()   : '';
+      if (!fromCode || !toCode || fromCode === toCode) return cb({ error: 'Invalid channels' });
+      if (!/^[a-f0-9]{8}$/i.test(fromCode) || !/^[a-f0-9]{8}$/i.test(toCode)) return cb({ error: 'Invalid channel codes' });
+
+      const fromCh = db.prepare('SELECT id, is_dm FROM channels WHERE code = ?').get(fromCode);
+      const toCh   = db.prepare('SELECT id, is_dm FROM channels WHERE code = ?').get(toCode);
+      if (!fromCh || !toCh) return cb({ error: 'Channel not found' });
+      if (fromCh.is_dm || toCh.is_dm) return cb({ error: 'Cannot move messages to or from DMs' });
+
+      // Permission: admin or delete_message on the source channel
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'delete_message', fromCh.id)) {
+        return cb({ error: 'You need message management permissions to move messages' });
+      }
+
+      // Verify all messages belong to the source channel
+      const placeholders = messageIds.map(() => '?').join(',');
+      const count = db.prepare(
+        `SELECT COUNT(*) as cnt FROM messages WHERE id IN (${placeholders}) AND channel_id = ?`
+      ).get(...messageIds, fromCh.id);
+      if (!count || count.cnt !== messageIds.length) return cb({ error: 'Some messages were not found in the source channel' });
+
+      // Move messages in a transaction
+      try {
+        db.prepare(
+          `UPDATE messages SET channel_id = ? WHERE id IN (${placeholders}) AND channel_id = ?`
+        ).run(toCh.id, ...messageIds, fromCh.id);
+
+        // Also move any pinned_messages references
+        db.prepare(
+          `UPDATE pinned_messages SET channel_id = ? WHERE message_id IN (${placeholders}) AND channel_id = ?`
+        ).run(toCh.id, ...messageIds, fromCh.id);
+      } catch (err) {
+        console.error('Move messages error:', err);
+        return cb({ error: 'Failed to move messages' });
+      }
+
+      // Notify both channels
+      io.to(`channel:${fromCode}`).emit('messages-moved', {
+        channelCode: fromCode,
+        messageIds,
+        toChannel: toCode
+      });
+      io.to(`channel:${toCode}`).emit('messages-received', {
+        channelCode: toCode,
+        fromChannel: fromCode,
+        messageIds
+      });
+
+      cb({ success: true, moved: messageIds.length });
     });
 
     // ═══════════════ PIN / UNPIN MESSAGE ════════════════════
@@ -5114,7 +5177,7 @@ function setupSocketHandlers(io, db) {
             'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
             'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
             'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
-            'manage_roles', 'manage_server', 'delete_channel'
+            'manage_roles', 'manage_server', 'delete_channel', 'view_all_members'
           ];
           // Escalation guard: non-admins cannot grant permissions they don't have
           const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'];
@@ -5777,7 +5840,7 @@ function setupSocketHandlers(io, db) {
       if (!name || name.length === 0 || name.length > 50) {
         return socket.emit('error-msg', 'Channel name must be 1-50 characters');
       }
-      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
+      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
         return socket.emit('error-msg', 'Channel name contains invalid characters');
       }
 
@@ -5822,7 +5885,7 @@ function setupSocketHandlers(io, db) {
       if (!name || name.length === 0 || name.length > 50) {
         return socket.emit('error-msg', 'Sub-channel name must be 1-50 characters');
       }
-      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
+      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
         return socket.emit('error-msg', 'Sub-channel name contains invalid characters');
       }
 

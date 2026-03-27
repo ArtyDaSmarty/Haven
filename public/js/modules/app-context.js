@@ -778,6 +778,7 @@ async _syncTunnelState(enabled) {
 /** Fetch current tunnel status from server and update UI.
  *  If the tunnel is still starting, poll every 2 s until it resolves. */
 async _refreshTunnelStatus() {
+  if (!this.user?.isAdmin) return;
   try {
     const res = await fetch('/api/tunnel/status', {
       headers: { 'Authorization': `Bearer ${this.token}` }

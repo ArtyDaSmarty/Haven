@@ -537,11 +537,17 @@ _renderVoiceUsers(users) {
     const isStreaming = streams.some(s => s.sharerId === u.id);
     const watchingStreams = streams.filter(s => s.viewers.some(v => v.id === u.id));
     const isWatching = watchingStreams.length > 0;
+    // Webcam indicator
+    const hasWebcam = this.voice && this.voice.webcamUsers && this.voice.webcamUsers.has(u.id);
+
     let streamBadge = '';
     if (isStreaming) {
       const myStream = streams.find(s => s.sharerId === u.id);
       const viewerCount = myStream ? myStream.viewers.length : 0;
       streamBadge = `<span class="voice-stream-badge live" title="Streaming${viewerCount ? ' · ' + viewerCount + ' viewer' + (viewerCount > 1 ? 's' : '') : ''}">🔴 LIVE${viewerCount ? ' · ' + viewerCount : ''}</span>`;
+    }
+    if (hasWebcam) {
+      streamBadge += `<span class="voice-stream-badge webcam" title="Camera on">📹</span>`;
     }
     if (isWatching) {
       const watchNames = watchingStreams.map(s => s.sharerName).join(', ');

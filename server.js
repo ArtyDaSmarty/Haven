@@ -2241,12 +2241,12 @@ function runAutoCleanup() {
         db.prepare("SELECT avatar FROM users WHERE avatar IS NOT NULL AND avatar != ''").all()
           .forEach(r => protectedFiles.add(path.basename(r.avatar)));
         try {
-          db.prepare("SELECT url FROM custom_emojis").all()
-            .forEach(r => protectedFiles.add(path.basename(r.url)));
+          db.prepare("SELECT filename FROM custom_emojis").all()
+            .forEach(r => protectedFiles.add(path.basename(r.filename)));
         } catch { /* table may not exist */ }
         try {
-          db.prepare("SELECT url FROM custom_sounds").all()
-            .forEach(r => protectedFiles.add(path.basename(r.url)));
+          db.prepare("SELECT filename FROM custom_sounds").all()
+            .forEach(r => protectedFiles.add(path.basename(r.filename)));
         } catch { /* table may not exist */ }
         // Webhook/bot avatars
         try {
