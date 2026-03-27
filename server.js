@@ -4,6 +4,30 @@ const { DATA_DIR, DB_PATH, ENV_PATH, CERTS_DIR, UPLOADS_DIR } = require('./src/p
 // Bootstrap .env into the data directory if it doesn't exist yet
 const fs = require('fs');
 const path = require('path');
+const AdmZip = require('adm-zip');
+const {
+  addDirectoryToZip,
+  appendActiveUploadsToZip,
+  applyPendingRestoreIfPresent,
+  cleanupActiveUploads,
+  deleteUploadByName,
+  generateStoredFilename,
+  getPendingRestoreInfo,
+  getStorageConfig,
+  getUploadReadStream,
+  getUploadUrl,
+  isSafeUploadName,
+  migrateLocalUploadsToActiveStorage,
+  restoreUploadsFromDirectory,
+  stagePendingRestore,
+  storeUploadBuffer,
+  testS3Connection
+} = require('./src/storage');
+
+if (applyPendingRestoreIfPresent()) {
+  console.log(`Restored pending data import into ${DATA_DIR}`);
+}
+
 if (!fs.existsSync(ENV_PATH)) {
   const example = path.join(__dirname, '.env.example');
   if (fs.existsSync(example)) {
@@ -154,6 +178,29 @@ app.use('/uploads', express.static(UPLOADS_DIR, {
   }
 }));
 
+app.get('/uploads/:name', async (req, res, next) => {
+  const name = typeof req.params.name === 'string' ? req.params.name.trim() : '';
+  if (!isSafeUploadName(name)) return next();
+
+  try {
+    const file = await getUploadReadStream(name);
+    if (!file) return next();
+
+    const ext = path.extname(name).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+    if (file.contentType) res.setHeader('Content-Type', file.contentType);
+    if (file.contentLength) res.setHeader('Content-Length', String(file.contentLength));
+    if (file.lastModified) res.setHeader('Last-Modified', new Date(file.lastModified).toUTCString());
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    file.stream.pipe(res);
+  } catch (err) {
+    console.error('Upload proxy error:', err);
+    res.status(500).end();
+  }
+});
+
 // ── Plugin & Theme file serving ─────────────────────────
 const PLUGINS_DIR = path.join(__dirname, 'plugins');
 const THEMES_DIR  = path.join(__dirname, 'themes');
@@ -215,15 +262,7 @@ app.get('/api/themes', (req, res) => {
 });
 
 // ── File uploads (DB-configurable limit, avatar max 5 MB) ──
-const uploadDir = UPLOADS_DIR;
-
-const uploadStorage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
-  }
-});
+const uploadStorage = multer.memoryStorage();
 
 // Image-only upload — multer cap is high; real limit enforced per-request from DB
 const upload = multer({
@@ -241,6 +280,44 @@ const fileUpload = multer({
   storage: uploadStorage,
   limits: { fileSize: 2 * 1024 * 1024 * 1024 },  // hard cap 2 GB; DB-configurable limit enforced per-request
 });
+
+function decodeMultipartFilename(name = 'file') {
+  return Buffer.from(name, 'latin1').toString('utf8');
+}
+
+function validateImageMagic(file) {
+  const hdr = file?.buffer;
+  if (!hdr || !Buffer.isBuffer(hdr) || hdr.length < 12) return false;
+  if (file.mimetype === 'image/jpeg') return hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
+  if (file.mimetype === 'image/png') return hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
+  if (file.mimetype === 'image/gif') return hdr.slice(0, 6).toString().startsWith('GIF8');
+  if (file.mimetype === 'image/webp') return hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
+  return false;
+}
+
+function getValidatedImageExtension(mimetype) {
+  return {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'image/webp': '.webp'
+  }[mimetype] || null;
+}
+
+async function persistUploadedFile(file, options = {}) {
+  if (!file?.buffer) throw new Error('No file uploaded');
+  const originalName = decodeMultipartFilename(file.originalname || 'file');
+  const forcedExt = options.forcedExt || '';
+  const filename = options.filename || generateStoredFilename(originalName, forcedExt);
+  return storeUploadBuffer(file.buffer, {
+    filename,
+    originalName,
+    forcedExt,
+    mimeType: options.mimeType || file.mimetype,
+    folder: options.folder || 'uploads',
+    cacheControl: options.cacheControl
+  });
+}
 
 // ── API routes (rate-limited) ────────────────────────────
 app.use('/api/auth', authLimiter, authRoutes);
@@ -343,58 +420,27 @@ app.post('/api/upload-avatar', uploadLimiter, (req, res) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     if (req.file.size > 2 * 1024 * 1024) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Avatar must be under 2 MB' });
     }
 
-    // Validate file magic bytes
-    try {
-      const fd = fs.openSync(req.file.path, 'r');
-      const hdr = Buffer.alloc(12);
-      fs.readSync(fd, hdr, 0, 12, 0);
-      fs.closeSync(fd);
-      let validMagic = false;
-      if (req.file.mimetype === 'image/jpeg') validMagic = hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
-      else if (req.file.mimetype === 'image/png') validMagic = hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
-      else if (req.file.mimetype === 'image/gif') validMagic = hdr.slice(0, 6).toString().startsWith('GIF8');
-      else if (req.file.mimetype === 'image/webp') validMagic = hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
-      if (!validMagic) {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({ error: 'File content does not match image type' });
-      }
-    } catch {
-      try { fs.unlinkSync(req.file.path); } catch {}
+    if (!validateImageMagic(req.file)) {
       return res.status(400).json({ error: 'Failed to validate file' });
     }
 
-    // Force safe extension
-    const mimeToExt = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-    const safeExt = mimeToExt[req.file.mimetype];
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
     if (!safeExt) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid file type' });
     }
-    const currentExt = path.extname(req.file.filename).toLowerCase();
-    let finalName = req.file.filename;
-    if (currentExt !== safeExt) {
-      finalName = req.file.filename.replace(/\.[^.]+$/, '') + safeExt;
-      const oldPath = req.file.path;
-      const newPath = path.join(uploadDir, finalName);
-      fs.renameSync(oldPath, newPath);
-    }
-    const avatarUrl = `/uploads/${finalName}`;
-
-    // Update the user's avatar in the database
-    try {
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
       const db = getDb();
-      db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(avatarUrl, user.id);
-      console.log(`[Avatar] ${user.username} uploaded avatar: ${avatarUrl}`);
-    } catch (dbErr) {
+      db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(saved.url, user.id);
+      console.log(`[Avatar] ${user.username} uploaded avatar: ${saved.url}`);
+      res.json({ url: saved.url });
+    })().catch((dbErr) => {
       console.error('Avatar DB update error:', dbErr);
       return res.status(500).json({ error: 'Failed to save avatar' });
-    }
-
-    res.json({ url: avatarUrl });
+    });
   });
 });
 
@@ -429,44 +475,24 @@ app.post('/api/upload-proxy-avatar', uploadLimiter, (req, res) => {
     const settingRow = getDb().prepare("SELECT value FROM server_settings WHERE key = 'max_proxy_avatar_kb'").get();
     const maxKb = Math.max(32, Math.min(2048, parseInt(settingRow?.value || '256', 10) || 256));
     if (req.file.size > maxKb * 1024) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: `Proxy avatar must be under ${maxKb} KB` });
     }
 
-    try {
-      const fd = fs.openSync(req.file.path, 'r');
-      const hdr = Buffer.alloc(12);
-      fs.readSync(fd, hdr, 0, 12, 0);
-      fs.closeSync(fd);
-      let validMagic = false;
-      if (req.file.mimetype === 'image/jpeg') validMagic = hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
-      else if (req.file.mimetype === 'image/png') validMagic = hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
-      else if (req.file.mimetype === 'image/gif') validMagic = hdr.slice(0, 6).toString().startsWith('GIF8');
-      else if (req.file.mimetype === 'image/webp') validMagic = hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
-      if (!validMagic) {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({ error: 'File content does not match image type' });
-      }
-    } catch {
-      try { fs.unlinkSync(req.file.path); } catch {}
+    if (!validateImageMagic(req.file)) {
       return res.status(400).json({ error: 'Failed to validate file' });
     }
 
-    const mimeToExt = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-    const safeExt = mimeToExt[req.file.mimetype];
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
     if (!safeExt) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid file type' });
     }
-
-    const currentExt = path.extname(req.file.filename).toLowerCase();
-    let finalName = req.file.filename;
-    if (currentExt !== safeExt) {
-      finalName = req.file.filename.replace(/\.[^.]+$/, '') + safeExt;
-      fs.renameSync(req.file.path, path.join(uploadDir, finalName));
-    }
-
-    res.json({ url: `/uploads/${finalName}`, maxKb });
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
+      res.json({ url: saved.url, maxKb });
+    })().catch((uploadErr) => {
+      console.error('Proxy avatar upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save proxy avatar' });
+    });
   });
 });
 
@@ -502,50 +528,30 @@ app.post('/api/upload-webhook-avatar', uploadLimiter, (req, res) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    // Validate file magic bytes
-    try {
-      const fd = fs.openSync(req.file.path, 'r');
-      const hdr = Buffer.alloc(12);
-      fs.readSync(fd, hdr, 0, 12, 0);
-      fs.closeSync(fd);
-      let validMagic = false;
-      if (req.file.mimetype === 'image/jpeg') validMagic = hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
-      else if (req.file.mimetype === 'image/png') validMagic = hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
-      else if (req.file.mimetype === 'image/gif') validMagic = hdr.slice(0, 6).toString().startsWith('GIF8');
-      else if (req.file.mimetype === 'image/webp') validMagic = hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
-      if (!validMagic) {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({ error: 'File content does not match image type' });
-      }
-    } catch {
-      try { fs.unlinkSync(req.file.path); } catch {}
+    if (!validateImageMagic(req.file)) {
       return res.status(400).json({ error: 'Failed to validate file' });
     }
 
-    const mimeToExt = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-    const safeExt = mimeToExt[req.file.mimetype];
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
     if (!safeExt) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid file type' });
     }
-    const currentExt = path.extname(req.file.filename).toLowerCase();
-    let finalName = req.file.filename;
-    if (currentExt !== safeExt) {
-      finalName = req.file.filename.replace(/\.[^.]+$/, '') + safeExt;
-      fs.renameSync(req.file.path, path.join(uploadDir, finalName));
-    }
-    const avatarUrl = `/uploads/${finalName}`;
 
-    // Update the webhook's avatar in DB
-    const webhookId = parseInt(req.body?.webhookId || req.query?.webhookId);
-    if (!isNaN(webhookId)) {
-      try {
-        getDb().prepare('UPDATE webhooks SET avatar_url = ? WHERE id = ?').run(avatarUrl, webhookId);
-      } catch (dbErr) {
-        console.error('Webhook avatar DB error:', dbErr);
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
+      const webhookId = parseInt(req.body?.webhookId || req.query?.webhookId);
+      if (!isNaN(webhookId)) {
+        try {
+          getDb().prepare('UPDATE webhooks SET avatar_url = ? WHERE id = ?').run(saved.url, webhookId);
+        } catch (dbErr) {
+          console.error('Webhook avatar DB error:', dbErr);
+        }
       }
-    }
-    res.json({ url: avatarUrl });
+      res.json({ url: saved.url });
+    })().catch((uploadErr) => {
+      console.error('Webhook avatar upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save avatar' });
+    });
   });
 });
 
@@ -573,6 +579,157 @@ app.post('/api/tunnel/sync', express.json(), async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err?.message || 'Tunnel sync failed' });
   }
+});
+
+function getAdminFromRequest(req) {
+  const token = req.headers.authorization?.split(' ')[1];
+  const user = token ? verifyToken(token) : null;
+  return user && verifyAdminFromDb(user) ? user : null;
+}
+
+function buildStorageStatusPayload() {
+  const config = getStorageConfig();
+  const pendingRestore = getPendingRestoreInfo();
+  return {
+    provider: config.provider,
+    bucket: config.s3.bucket,
+    endpoint: config.s3.endpoint,
+    prefix: config.s3.prefix,
+    pendingRestore: pendingRestore.pending
+  };
+}
+
+app.get('/api/admin/storage/status', (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+  res.json(buildStorageStatusPayload());
+});
+
+app.post('/api/admin/storage/test', express.json(), async (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+  try {
+    const body = req.body || {};
+    await testS3Connection({
+      endpoint: String(body.endpoint || '').trim(),
+      region: String(body.region || 'auto').trim() || 'auto',
+      bucket: String(body.bucket || '').trim(),
+      accessKeyId: String(body.accessKeyId || '').trim(),
+      secretAccessKey: String(body.secretAccessKey || '').trim(),
+      prefix: String(body.prefix || 'haven').trim(),
+      forcePathStyle: body.forcePathStyle !== false
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Connection test failed' });
+  }
+});
+
+app.post('/api/admin/storage/migrate', async (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+  try {
+    const result = await migrateLocalUploadsToActiveStorage();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Storage migration error:', err);
+    res.status(500).json({ error: err?.message || 'Migration failed' });
+  }
+});
+
+app.get('/api/admin/volume/backup', async (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+  try {
+    const zip = new AdmZip();
+    const storageConfig = getStorageConfig();
+
+    addDirectoryToZip(zip, CERTS_DIR, 'certs');
+    if (fs.existsSync(ENV_PATH)) zip.addFile('.env', fs.readFileSync(ENV_PATH));
+    if (fs.existsSync(DB_PATH)) zip.addFile('haven.db', fs.readFileSync(DB_PATH));
+    if (fs.existsSync(`${DB_PATH}-shm`)) zip.addFile('haven.db-shm', fs.readFileSync(`${DB_PATH}-shm`));
+    if (fs.existsSync(`${DB_PATH}-wal`)) zip.addFile('haven.db-wal', fs.readFileSync(`${DB_PATH}-wal`));
+
+    if (storageConfig.provider === 'local') addDirectoryToZip(zip, UPLOADS_DIR, 'uploads');
+    else await appendActiveUploadsToZip(zip);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="haven-data-backup-${stamp}.zip"`);
+    res.send(zip.toBuffer());
+  } catch (err) {
+    console.error('Volume backup error:', err);
+    res.status(500).json({ error: 'Failed to create backup zip' });
+  }
+});
+
+const volumeImportUpload = multer({
+  storage: multer.diskStorage({
+    destination: DATA_DIR,
+    filename: (req, file, cb) => {
+      cb(null, `haven-volume-import-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.zip`);
+    }
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (ext === '.zip') cb(null, true);
+    else cb(new Error('Only .zip files are accepted'));
+  }
+});
+
+function detectRestoreRoot(extractDir) {
+  const directSignals = ['.env', 'haven.db', 'uploads', 'certs'];
+  const entries = fs.readdirSync(extractDir);
+  if (entries.some((name) => directSignals.includes(name))) return extractDir;
+  if (entries.length === 1) {
+    const candidate = path.join(extractDir, entries[0]);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+  }
+  return extractDir;
+}
+
+app.post('/api/admin/volume/import', uploadLimiter, (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+
+  volumeImportUpload.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file?.path) return res.status(400).json({ error: 'No zip uploaded' });
+
+    const tempRoot = path.join(DATA_DIR, `restore-upload-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+    try {
+      fs.mkdirSync(tempRoot, { recursive: true });
+      const zip = new AdmZip(req.file.path);
+      zip.extractAllTo(tempRoot, true);
+
+      const restoreRoot = detectRestoreRoot(tempRoot);
+      const uploadsRoot = path.join(restoreRoot, 'uploads');
+      const uploadRestore = await restoreUploadsFromDirectory(uploadsRoot);
+
+      const pendingRoot = path.join(tempRoot, 'pending-root');
+      fs.mkdirSync(pendingRoot, { recursive: true });
+      for (const entry of fs.readdirSync(restoreRoot, { withFileTypes: true })) {
+        if (entry.name === 'uploads') continue;
+        const src = path.join(restoreRoot, entry.name);
+        const dst = path.join(pendingRoot, entry.name);
+        if (entry.isDirectory()) {
+          fs.cpSync(src, dst, { recursive: true, force: true });
+        } else {
+          fs.copyFileSync(src, dst);
+        }
+      }
+
+      stagePendingRestore(pendingRoot);
+      res.json({
+        ok: true,
+        ...uploadRestore,
+        restartRequired: true,
+        message: 'Import staged. Restart Haven to apply database and config files.'
+      });
+    } catch (importErr) {
+      console.error('Volume import error:', importErr);
+      res.status(500).json({ error: importErr?.message || 'Failed to import backup zip' });
+    } finally {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
+    }
+  });
 });
 
 app.get('/', (req, res) => {
@@ -769,47 +926,24 @@ app.post('/api/upload', uploadLimiter, (req, res) => {
     const maxMbRow = getDb().prepare("SELECT value FROM server_settings WHERE key = 'max_upload_mb'").get();
     const maxBytes = (parseInt(maxMbRow?.value) || 25) * 1024 * 1024;
     if (req.file.size > maxBytes) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: `Image too large (max ${maxMbRow?.value || 25} MB)` });
     }
 
-    // Validate file magic bytes (don't trust MIME type alone)
-    try {
-      const fd = fs.openSync(req.file.path, 'r');
-      const hdr = Buffer.alloc(12);
-      fs.readSync(fd, hdr, 0, 12, 0);
-      fs.closeSync(fd);
-      let validMagic = false;
-      if (req.file.mimetype === 'image/jpeg') validMagic = hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
-      else if (req.file.mimetype === 'image/png') validMagic = hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
-      else if (req.file.mimetype === 'image/gif') validMagic = hdr.slice(0, 6).toString().startsWith('GIF8');
-      else if (req.file.mimetype === 'image/webp') validMagic = hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
-      if (!validMagic) {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({ error: 'File content does not match image type' });
-      }
-    } catch {
-      try { fs.unlinkSync(req.file.path); } catch {}
+    if (!validateImageMagic(req.file)) {
       return res.status(400).json({ error: 'Failed to validate file' });
     }
 
-    // Force safe extension based on validated mimetype (prevent HTML/SVG upload)
-    const mimeToExt = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-    const safeExt = mimeToExt[req.file.mimetype];
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
     if (!safeExt) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid file type' });
     }
-    // Rename file to use safe extension if it doesn't already match
-    const currentExt = path.extname(req.file.filename).toLowerCase();
-    if (currentExt !== safeExt) {
-      const safeName = req.file.filename.replace(/\.[^.]+$/, '') + safeExt;
-      const oldPath = req.file.path;
-      const newPath = path.join(uploadDir, safeName);
-      fs.renameSync(oldPath, newPath);
-      return res.json({ url: `/uploads/${safeName}` });
-    }
-    res.json({ url: `/uploads/${req.file.filename}` });
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
+      res.json({ url: saved.url });
+    })().catch((uploadErr) => {
+      console.error('Image upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save image' });
+    });
   });
 });
 
@@ -841,23 +975,24 @@ app.post('/api/upload-file', uploadLimiter, (req, res) => {
     const maxMbRow = getDb().prepare("SELECT value FROM server_settings WHERE key = 'max_upload_mb'").get();
     const maxBytes = (parseInt(maxMbRow?.value) || 25) * 1024 * 1024;
     if (req.file.size > maxBytes) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: `File too large (max ${maxMbRow?.value || 25} MB)` });
     }
 
     const isImage = /^image\//.test(req.file.mimetype);
-    // multer passes the raw bytes from the multipart header as a latin1 string;
-    // browsers encode filenames as UTF-8 bytes, so re-decode to recover the
-    // original text (fixes garbled Chinese/emoji/non-ASCII filenames).
-    const originalName = Buffer.from(req.file.originalname || 'file', 'latin1').toString('utf8');
+    const originalName = decodeMultipartFilename(req.file.originalname || 'file');
     const fileSize = req.file.size;
-
-    res.json({
-      url: `/uploads/${req.file.filename}`,
-      originalName,
-      fileSize,
-      isImage,
-      mimetype: req.file.mimetype
+    (async () => {
+      const saved = await persistUploadedFile(req.file);
+      res.json({
+        url: saved.url,
+        originalName,
+        fileSize,
+        isImage,
+        mimetype: req.file.mimetype
+      });
+    })().catch((uploadErr) => {
+      console.error('File upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save file' });
     });
   });
 });
@@ -946,16 +1081,17 @@ app.post('/api/upload-sound', uploadLimiter, (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     let name = (req.body.name || '').trim().replace(/[^a-zA-Z0-9 _-]/g, '').replace(/\s+/g, ' ').trim();
-    if (!name) name = path.basename(req.file.filename, path.extname(req.file.filename));
+    if (!name) name = path.basename(decodeMultipartFilename(req.file.originalname || 'sound'), path.extname(decodeMultipartFilename(req.file.originalname || 'sound')));
     if (name.length > 30) name = name.slice(0, 30);
 
     const { getDb } = require('./src/database');
-    try {
+    (async () => {
+      const saved = await persistUploadedFile(req.file);
       getDb().prepare(
         'INSERT OR REPLACE INTO custom_sounds (name, filename, uploaded_by) VALUES (?, ?, ?)'
-      ).run(name, req.file.filename, user.id);
-      res.json({ name, url: `/uploads/${req.file.filename}` });
-    } catch { res.status(500).json({ error: 'Failed to save sound' }); }
+      ).run(name, saved.name, user.id);
+      res.json({ name, url: saved.url });
+    })().catch(() => res.status(500).json({ error: 'Failed to save sound' }));
   });
 });
 
@@ -982,7 +1118,7 @@ app.delete('/api/sounds/:name', (req, res) => {
   try {
     const row = getDb().prepare('SELECT filename FROM custom_sounds WHERE name = ?').get(name);
     if (row) {
-      try { fs.unlinkSync(path.join(uploadDir, row.filename)); } catch {}
+      deleteUploadByName(row.filename).catch(() => {});
       getDb().prepare('DELETE FROM custom_sounds WHERE name = ?').run(name);
     }
     res.json({ ok: true });
@@ -1034,16 +1170,17 @@ app.post('/api/upload-emoji', uploadLimiter, (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     let name = (req.body.name || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-    if (!name) name = path.basename(req.file.filename, path.extname(req.file.filename));
+    if (!name) name = path.basename(decodeMultipartFilename(req.file.originalname || 'emoji'), path.extname(decodeMultipartFilename(req.file.originalname || 'emoji')));
     if (name.length > 30) name = name.slice(0, 30);
 
     const { getDb } = require('./src/database');
-    try {
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { cacheControl: 'public, max-age=604800, immutable' });
       getDb().prepare(
         'INSERT OR REPLACE INTO custom_emojis (name, filename, uploaded_by) VALUES (?, ?, ?)'
-      ).run(name, req.file.filename, user.id);
-      res.json({ name, url: `/uploads/${req.file.filename}` });
-    } catch { res.status(500).json({ error: 'Failed to save emoji' }); }
+      ).run(name, saved.name, user.id);
+      res.json({ name, url: saved.url });
+    })().catch(() => res.status(500).json({ error: 'Failed to save emoji' }));
   });
 });
 
@@ -1068,7 +1205,7 @@ app.delete('/api/emojis/:name', (req, res) => {
   try {
     const row = getDb().prepare('SELECT filename FROM custom_emojis WHERE name = ?').get(name);
     if (row) {
-      try { fs.unlinkSync(path.join(uploadDir, row.filename)); } catch {}
+      deleteUploadByName(row.filename).catch(() => {});
       getDb().prepare('DELETE FROM custom_emojis WHERE name = ?').run(name);
     }
     res.json({ ok: true });
@@ -1097,27 +1234,21 @@ app.post('/api/upload-server-icon', uploadLimiter, (req, res) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     if (req.file.size > 2 * 1024 * 1024) {
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Server icon must be under 2 MB' });
     }
-    // Validate magic bytes
-    try {
-      const fd = fs.openSync(req.file.path, 'r');
-      const hdr = Buffer.alloc(12);
-      fs.readSync(fd, hdr, 0, 12, 0);
-      fs.closeSync(fd);
-      let validMagic = false;
-      if (req.file.mimetype === 'image/jpeg') validMagic = hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF;
-      else if (req.file.mimetype === 'image/png') validMagic = hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4E && hdr[3] === 0x47;
-      else if (req.file.mimetype === 'image/gif') validMagic = hdr.slice(0, 6).toString().startsWith('GIF8');
-      else if (req.file.mimetype === 'image/webp') validMagic = hdr.slice(0, 4).toString() === 'RIFF' && hdr.slice(8, 12).toString() === 'WEBP';
-      if (!validMagic) { fs.unlinkSync(req.file.path); return res.status(400).json({ error: 'Invalid image' }); }
-    } catch { try { fs.unlinkSync(req.file.path); } catch {} return res.status(400).json({ error: 'Failed to validate' }); }
+    if (!validateImageMagic(req.file)) return res.status(400).json({ error: 'Failed to validate' });
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
+    if (!safeExt) return res.status(400).json({ error: 'Invalid image' });
 
-    const iconUrl = `/uploads/${req.file.filename}`;
-    const { getDb } = require('./src/database');
-    getDb().prepare("INSERT OR REPLACE INTO server_settings (key, value) VALUES ('server_icon', ?)").run(iconUrl);
-    res.json({ url: iconUrl });
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
+      const { getDb } = require('./src/database');
+      getDb().prepare("INSERT OR REPLACE INTO server_settings (key, value) VALUES ('server_icon', ?)").run(saved.url);
+      res.json({ url: saved.url });
+    })().catch((uploadErr) => {
+      console.error('Server icon upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save server icon' });
+    });
   });
 });
 
@@ -2232,7 +2363,7 @@ setupSocketHandlers(io, db);
 registerProcessCleanup();
 
 // ── Auto-cleanup interval (runs every 15 minutes) ───────
-function runAutoCleanup() {
+async function runAutoCleanup() {
   try {
     const getSetting = (key) => {
       const row = db.prepare('SELECT value FROM server_settings WHERE key = ?').get(key);
@@ -2289,67 +2420,35 @@ function runAutoCleanup() {
 
     // Also clean up old uploaded files if age cleanup is set
     if (maxAgeDays > 0) {
-      const uploadsDir = UPLOADS_DIR;
-      if (require('fs').existsSync(uploadsDir)) {
-        // Build a set of protected filenames (server icon, avatars, emojis, sounds)
-        const protectedFiles = new Set();
-        const iconRow = db.prepare("SELECT value FROM server_settings WHERE key = 'server_icon'").get();
-        if (iconRow?.value) protectedFiles.add(path.basename(iconRow.value));
-        db.prepare("SELECT avatar FROM users WHERE avatar IS NOT NULL AND avatar != ''").all()
-          .forEach(r => protectedFiles.add(path.basename(r.avatar)));
-        try {
-          db.prepare("SELECT filename FROM custom_emojis").all()
-            .forEach(r => protectedFiles.add(path.basename(r.filename)));
-        } catch { /* table may not exist */ }
-        try {
-          db.prepare("SELECT filename FROM custom_sounds").all()
-            .forEach(r => protectedFiles.add(path.basename(r.filename)));
-        } catch { /* table may not exist */ }
-        // Webhook/bot avatars
-        try {
-          db.prepare("SELECT avatar_url FROM webhooks WHERE avatar_url IS NOT NULL AND avatar_url != ''").all()
-            .forEach(r => protectedFiles.add(path.basename(r.avatar_url)));
-        } catch { /* table may not exist */ }
-        try {
-          db.prepare("SELECT avatar_url FROM proxies WHERE avatar_url IS NOT NULL AND avatar_url != ''").all()
-            .forEach(r => protectedFiles.add(path.basename(r.avatar_url)));
-        } catch { /* table may not exist */ }
+      const protectedFiles = new Set();
+      const iconRow = db.prepare("SELECT value FROM server_settings WHERE key = 'server_icon'").get();
+      if (iconRow?.value) protectedFiles.add(path.basename(iconRow.value));
+      db.prepare("SELECT avatar FROM users WHERE avatar IS NOT NULL AND avatar != ''").all()
+        .forEach(r => protectedFiles.add(path.basename(r.avatar)));
+      try {
+        db.prepare("SELECT filename FROM custom_emojis").all()
+          .forEach(r => protectedFiles.add(path.basename(r.filename)));
+      } catch { /* table may not exist */ }
+      try {
+        db.prepare("SELECT filename FROM custom_sounds").all()
+          .forEach(r => protectedFiles.add(path.basename(r.filename)));
+      } catch { /* table may not exist */ }
+      try {
+        db.prepare("SELECT avatar_url FROM webhooks WHERE avatar_url IS NOT NULL AND avatar_url != ''").all()
+          .forEach(r => protectedFiles.add(path.basename(r.avatar_url)));
+      } catch { /* table may not exist */ }
+      try {
+        db.prepare("SELECT avatar_url FROM proxies WHERE avatar_url IS NOT NULL AND avatar_url != ''").all()
+          .forEach(r => protectedFiles.add(path.basename(r.avatar_url)));
+      } catch { /* table may not exist */ }
 
-        const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-        const files = require('fs').readdirSync(uploadsDir);
-        let filesDeleted = 0;
-        files.forEach(f => {
-          if (protectedFiles.has(f)) return; // never delete critical files
-          try {
-            const fpath = require('path').join(uploadsDir, f);
-            const stat = require('fs').statSync(fpath);
-            if (stat.mtimeMs < cutoff) {
-              require('fs').unlinkSync(fpath);
-              filesDeleted++;
-            }
-          } catch { /* skip */ }
-        });
-        if (filesDeleted > 0) {
-          console.log(`🗑️  Auto-cleanup: removed ${filesDeleted} old uploaded files`);
-        }
-
-        // Clean up deleted-attachments folder (files moved here when messages were deleted)
-        const deletedDir = path.join(UPLOADS_DIR, 'deleted-attachments');
-        if (require('fs').existsSync(deletedDir)) {
-          let daDeleted = 0;
-          for (const f of require('fs').readdirSync(deletedDir)) {
-            try {
-              const fp = require('path').join(deletedDir, f);
-              if (require('fs').statSync(fp).mtimeMs < cutoff) {
-                require('fs').unlinkSync(fp);
-                daDeleted++;
-              }
-            } catch { /* skip */ }
-          }
-          if (daDeleted > 0) {
-            console.log(`🗑️  Auto-cleanup: removed ${daDeleted} files from deleted-attachments`);
-          }
-        }
+      const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+      const uploadCleanup = await cleanupActiveUploads({ protectedFiles, cutoff });
+      if (uploadCleanup.uploadsDeleted > 0) {
+        console.log(`🗑️  Auto-cleanup: removed ${uploadCleanup.uploadsDeleted} old uploaded files`);
+      }
+      if (uploadCleanup.deletedAttachmentsDeleted > 0) {
+        console.log(`🗑️  Auto-cleanup: removed ${uploadCleanup.deletedAttachmentsDeleted} files from deleted-attachments`);
       }
     }
 
