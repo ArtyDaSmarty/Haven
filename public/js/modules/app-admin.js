@@ -317,9 +317,19 @@ _applyServerSettings() {
     const s3Region = document.getElementById('storage-s3-region');
     if (s3Region) s3Region.value = this.serverSettings.storage_s3_region || 'auto';
     const s3AccessKey = document.getElementById('storage-s3-access-key');
-    if (s3AccessKey) s3AccessKey.value = this.serverSettings.storage_s3_access_key || '';
+    if (s3AccessKey) {
+      s3AccessKey.value = '';
+      s3AccessKey.placeholder = this.serverSettings.storage_s3_access_key_configured === 'true'
+        ? 'Stored securely on server — leave blank to keep current key'
+        : 'Access key ID';
+    }
     const s3SecretKey = document.getElementById('storage-s3-secret-key');
-    if (s3SecretKey) s3SecretKey.value = this.serverSettings.storage_s3_secret_key || '';
+    if (s3SecretKey) {
+      s3SecretKey.value = '';
+      s3SecretKey.placeholder = this.serverSettings.storage_s3_secret_key_configured === 'true'
+        ? 'Stored securely on server — leave blank to keep current secret'
+        : 'Secret access key';
+    }
     const s3Prefix = document.getElementById('storage-s3-prefix');
     if (s3Prefix) s3Prefix.value = this.serverSettings.storage_s3_prefix || 'haven';
     const s3PathStyle = document.getElementById('storage-s3-force-path-style');
@@ -435,8 +445,8 @@ _snapshotAdminSettings() {
     storage_s3_endpoint: this.serverSettings.storage_s3_endpoint || '',
     storage_s3_bucket: this.serverSettings.storage_s3_bucket || '',
     storage_s3_region: this.serverSettings.storage_s3_region || 'auto',
-    storage_s3_access_key: this.serverSettings.storage_s3_access_key || '',
-    storage_s3_secret_key: this.serverSettings.storage_s3_secret_key || '',
+    storage_s3_access_key_configured: this.serverSettings.storage_s3_access_key_configured || 'false',
+    storage_s3_secret_key_configured: this.serverSettings.storage_s3_secret_key_configured || 'false',
     storage_s3_prefix: this.serverSettings.storage_s3_prefix || 'haven',
     storage_s3_force_path_style: this.serverSettings.storage_s3_force_path_style || 'true',
     update_banner_admin_only: this.serverSettings.update_banner_admin_only || 'false',
@@ -554,13 +564,13 @@ _saveAdminSettings() {
   }
 
   const s3AccessKey = document.getElementById('storage-s3-access-key')?.value.trim() || '';
-  if (s3AccessKey !== (snap.storage_s3_access_key || '')) {
+  if (s3AccessKey) {
     this.socket.emit('update-server-setting', { key: 'storage_s3_access_key', value: s3AccessKey });
     changed = true;
   }
 
   const s3SecretKey = document.getElementById('storage-s3-secret-key')?.value.trim() || '';
-  if (s3SecretKey !== (snap.storage_s3_secret_key || '')) {
+  if (s3SecretKey) {
     this.socket.emit('update-server-setting', { key: 'storage_s3_secret_key', value: s3SecretKey });
     changed = true;
   }
@@ -633,9 +643,9 @@ _cancelAdminSettings() {
     const sr = document.getElementById('storage-s3-region');
     if (sr) sr.value = snap.storage_s3_region || 'auto';
     const sak = document.getElementById('storage-s3-access-key');
-    if (sak) sak.value = snap.storage_s3_access_key || '';
+    if (sak) sak.value = '';
     const ssk = document.getElementById('storage-s3-secret-key');
-    if (ssk) ssk.value = snap.storage_s3_secret_key || '';
+    if (ssk) ssk.value = '';
     const spr = document.getElementById('storage-s3-prefix');
     if (spr) spr.value = snap.storage_s3_prefix || 'haven';
     const sps = document.getElementById('storage-s3-force-path-style');
