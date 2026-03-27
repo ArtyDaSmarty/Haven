@@ -915,6 +915,7 @@ function setupSocketHandlers(io, db) {
       }
 
       const code = generateChannelCode();
+      const channelType = data.channelType === 'forum' ? 'forum' : 'standard';
       const isPrivate = data.isPrivate ? 1 : 0;
 
       // Optional temporary channel: duration in hours (1–720 = 30 days max)
@@ -928,8 +929,18 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO channels (name, code, created_by, is_private, expires_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(name.trim(), code, socket.user.id, isPrivate, expiresAt);
+          'INSERT INTO channels (name, code, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+          name.trim(),
+          code,
+          socket.user.id,
+          isPrivate,
+          expiresAt,
+          channelType,
+          channelType === 'forum' ? 0 : 1,
+          channelType === 'forum' ? 0 : 1,
+          channelType === 'forum' ? 0 : 1
+        );
 
         // Auto-join creator
         db.prepare(
@@ -959,7 +970,11 @@ function setupSocketHandlers(io, db) {
           topic: '',
           is_dm: 0,
           is_private: isPrivate,
-          expires_at: expiresAt
+          expires_at: expiresAt,
+          channel_type: channelType,
+          text_enabled: channelType === 'forum' ? 0 : 1,
+          media_enabled: channelType === 'forum' ? 0 : 1,
+          voice_enabled: channelType === 'forum' ? 0 : 1
         };
 
         socket.join(`channel:${code}`);
@@ -3653,7 +3668,7 @@ function setupSocketHandlers(io, db) {
             'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
             'pin_message', 'kick_user', 'mute_user', 'ban_user',
             'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
-            'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+            'create_forum_posts', 'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
             'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
             'manage_roles', 'manage_server', 'delete_channel'
           ];
@@ -5110,7 +5125,7 @@ function setupSocketHandlers(io, db) {
         const validPerms = [
           'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
           'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-          'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+          'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
           'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
           'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
           'manage_roles', 'manage_server', 'delete_channel'
@@ -5174,7 +5189,7 @@ function setupSocketHandlers(io, db) {
           const validPerms = [
             'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
             'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-            'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+            'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
             'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
             'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
             'manage_roles', 'manage_server', 'delete_channel', 'view_all_members'
@@ -5241,16 +5256,16 @@ function setupSocketHandlers(io, db) {
         const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
 
         const serverMod = insertRole.run('Server Mod', 50, 'server', '#3498db');
-        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','delete_own_messages','edit_own_messages']
+        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','create_forum_posts','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','delete_own_messages','edit_own_messages']
           .forEach(p => insertPerm.run(serverMod.lastInsertRowid, p));
 
         const channelMod = insertRole.run('Channel Mod', 25, 'channel', '#2ecc71');
-        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','delete_lower_messages','upload_files','use_voice','view_history','delete_own_messages','edit_own_messages']
+        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','create_forum_posts','delete_lower_messages','upload_files','use_voice','view_history','delete_own_messages','edit_own_messages']
           .forEach(p => insertPerm.run(channelMod.lastInsertRowid, p));
 
         const userRole = insertRole.run('User', 1, 'server', '#95a5a6');
         db.prepare('UPDATE roles SET auto_assign = 1 WHERE id = ?').run(userRole.lastInsertRowid);
-        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history']
+        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history','create_forum_posts']
           .forEach(p => insertPerm.run(userRole.lastInsertRowid, p));
 
         // Auto-assign the User role to all existing users
@@ -5770,7 +5785,7 @@ function setupSocketHandlers(io, db) {
             const allPerms = [
               'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
               'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-              'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+              'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
               'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
               'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
             ];
@@ -5966,6 +5981,159 @@ function setupSocketHandlers(io, db) {
     // ═══════════════════════════════════════════════════════════
     // CHANNEL FEATURE TOGGLES (streams, music, slow mode)
     // ═══════════════════════════════════════════════════════════
+
+    socket.on('get-forum-overview', (data) => {
+      if (!data || typeof data !== 'object') return;
+      const code = typeof data.code === 'string' ? data.code.trim() : '';
+      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
+
+      const parent = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
+      if (!parent || parent.channel_type !== 'forum') return;
+
+      const isParentMember = socket.user.isAdmin
+        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
+      if (!isParentMember) return socket.emit('error-msg', 'Join this forum channel first');
+
+      const posts = db.prepare(`
+        SELECT c.id, c.code, c.name, c.category, c.is_private, c.created_at,
+               COALESCE(u.display_name, u.username, 'Unknown') as author
+        FROM channels c
+        LEFT JOIN users u ON c.created_by = u.id
+        WHERE c.parent_channel_id = ?
+        ORDER BY c.position, c.created_at DESC, c.id DESC
+      `).all(parent.id).map(post => {
+        const isMember = socket.user.isAdmin
+          || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(post.id, socket.user.id);
+        if (post.is_private && !isMember && !socket.user.isAdmin) return null;
+        const originalPost = db.prepare(`
+          SELECT m.content
+          FROM messages m
+          JOIN pinned_messages pm ON pm.message_id = m.id
+          WHERE pm.channel_id = ?
+          ORDER BY pm.pinned_at ASC
+          LIMIT 1
+        `).get(post.id);
+        const latestId = db.prepare('SELECT MAX(id) as latest_id FROM messages WHERE channel_id = ?').get(post.id)?.latest_id || 0;
+        const messageCount = db.prepare('SELECT COUNT(*) as cnt FROM messages WHERE channel_id = ?').get(post.id)?.cnt || 0;
+        const lastRead = db.prepare('SELECT last_read_message_id FROM read_positions WHERE user_id = ? AND channel_id = ?').get(socket.user.id, post.id)?.last_read_message_id || 0;
+        return {
+          id: post.id,
+          code: post.code,
+          name: post.name,
+          tag: post.category || '',
+          isPrivate: !!post.is_private,
+          isMember,
+          author: post.author,
+          preview: sanitizeText(originalPost?.content || '').slice(0, 180),
+          messageCount,
+          unreadCount: latestId > lastRead
+            ? (db.prepare('SELECT COUNT(*) as cnt FROM messages WHERE channel_id = ? AND id > ? AND user_id != ?').get(post.id, lastRead, socket.user.id)?.cnt || 0)
+            : 0
+        };
+      }).filter(Boolean);
+
+      socket.emit('forum-overview', {
+        code: parent.code,
+        name: parent.name,
+        topic: parent.topic || '',
+        posts
+      });
+    });
+
+    socket.on('join-forum-post', (data, cb) => {
+      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
+      const code = typeof data.code === 'string' ? data.code.trim() : '';
+      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb?.({ error: 'Invalid post code' });
+
+      const post = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
+      if (!post || !post.parent_channel_id) return cb?.({ error: 'Forum post not found' });
+      const parent = db.prepare('SELECT * FROM channels WHERE id = ?').get(post.parent_channel_id);
+      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum post not found' });
+
+      const isParentMember = socket.user.isAdmin
+        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
+      if (!isParentMember) return cb?.({ error: 'Join the parent forum first' });
+
+      db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(post.id, socket.user.id);
+      socket.join(`channel:${post.code}`);
+
+      const channel = db.prepare(`
+        SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
+               c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
+               c.parent_channel_id, c.position, c.is_private, c.expires_at,
+               c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
+               c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate
+        FROM channels c
+        WHERE c.id = ?
+      `).get(post.id);
+      if (channel) channel.display_code = channel.code;
+      cb?.({ ok: true, channel });
+      broadcastChannelLists();
+    });
+
+    socket.on('create-forum-post', (data, cb) => {
+      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
+      const parentCode = typeof data.parentCode === 'string' ? data.parentCode.trim() : '';
+      const title = typeof data.title === 'string' ? data.title.trim() : '';
+      const tag = typeof data.tag === 'string' ? data.tag.trim().slice(0, 30) : '';
+      const body = typeof data.body === 'string' ? sanitizeText(data.body.trim()).slice(0, 2000) : '';
+      if (!parentCode || !/^[a-f0-9]{8}$/i.test(parentCode)) return cb?.({ error: 'Invalid forum channel' });
+      if (!title || title.length > 50) return cb?.({ error: 'Title must be 1-50 characters' });
+      if (!body) return cb?.({ error: 'Original post is required' });
+      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(title)) {
+        return cb?.({ error: 'Post title contains invalid characters' });
+      }
+
+      const parent = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(parentCode);
+      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum channel not found' });
+      const isParentMember = socket.user.isAdmin
+        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
+      if (!isParentMember) return cb?.({ error: 'Join the parent forum first' });
+      if (!socket.user.isAdmin
+        && !userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
+        && !userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
+        && !userHasPermission(socket.user.id, 'create_channel', parent.id)) {
+        return cb?.({ error: 'You do not have permission to create forum posts' });
+      }
+
+      const code = generateChannelCode();
+      const maxPos = db.prepare('SELECT MAX(position) as mp FROM channels WHERE parent_channel_id = ?').get(parent.id);
+      const position = (maxPos && maxPos.mp != null) ? maxPos.mp + 1 : 0;
+
+      try {
+        const result = db.prepare(`
+          INSERT INTO channels (name, code, created_by, parent_channel_id, position, is_private, expires_at, category)
+          VALUES (?, ?, ?, ?, ?, 0, NULL, ?)
+        `).run(title, code, socket.user.id, parent.id, position, tag || null);
+
+        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(result.lastInsertRowid, socket.user.id);
+        socket.join(`channel:${code}`);
+
+        const messageResult = db.prepare(`
+          INSERT INTO messages (channel_id, user_id, content)
+          VALUES (?, ?, ?)
+        `).run(result.lastInsertRowid, socket.user.id, body);
+        db.prepare('INSERT INTO pinned_messages (message_id, channel_id, pinned_by) VALUES (?, ?, ?)').run(messageResult.lastInsertRowid, result.lastInsertRowid, socket.user.id);
+
+        const channel = db.prepare(`
+          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
+                 c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
+                 c.parent_channel_id, c.position, c.is_private, c.expires_at,
+                 c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate
+          FROM channels c
+          WHERE c.id = ?
+        `).get(result.lastInsertRowid);
+        if (channel) channel.display_code = channel.code;
+
+        cb?.({ ok: true, channel });
+        broadcastChannelLists();
+        io.to(`channel:${parent.code}`).emit('forum-post-created', { parentCode: parent.code, code });
+      } catch (err) {
+        console.error('Create forum post error:', err);
+        cb?.({ error: 'Failed to create forum post' });
+      }
+    });
 
     socket.on('toggle-channel-permission', (data) => {
       if (!data || typeof data !== 'object') return;
