@@ -26,9 +26,42 @@ const STORAGE_KEYS = [
   'storage_s3_prefix',
   'storage_s3_force_path_style'
 ];
+const SECURE_STORAGE_KEYS = ['storage_s3_access_key', 'storage_s3_secret_key'];
 
 let s3CacheKey = null;
 let s3Client = null;
+
+function getSettingsSecret() {
+  const secret = process.env.HAVEN_SETTINGS_SECRET || process.env.JWT_SECRET || '';
+  if (!secret) throw new Error('Missing HAVEN_SETTINGS_SECRET');
+  return crypto.createHash('sha256').update(secret, 'utf8').digest();
+}
+
+function encryptSecureValue(value) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getSettingsSecret(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(value || ''), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc-v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptSecureValue(payload) {
+  if (!payload) return '';
+  if (!String(payload).startsWith('enc-v1:')) return String(payload);
+  const parts = String(payload).split(':');
+  if (parts.length !== 4) throw new Error('Invalid secure settings payload');
+  const [, ivB64, tagB64, dataB64] = parts;
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    getSettingsSecret(),
+    Buffer.from(ivB64, 'base64')
+  );
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(dataB64, 'base64')),
+    decipher.final()
+  ]).toString('utf8');
+}
 
 function boolString(value, fallback = false) {
   if (value === 'true') return true;
@@ -45,7 +78,76 @@ function getDbSafe() {
   }
 }
 
+function ensureSecureSettingsMigrated(db = getDbSafe()) {
+  if (!db) return;
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS secure_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    const getLegacy = db.prepare('SELECT value FROM server_settings WHERE key = ?');
+    const getSecure = db.prepare('SELECT value FROM secure_settings WHERE key = ?');
+    const putSecure = db.prepare(`
+      INSERT INTO secure_settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    `);
+    const clearLegacy = db.prepare('UPDATE server_settings SET value = ? WHERE key = ?');
+
+    for (const key of SECURE_STORAGE_KEYS) {
+      const secureRow = getSecure.get(key);
+      const legacyValue = String(getLegacy.get(key)?.value || '').trim();
+      if (!secureRow?.value && legacyValue) {
+        putSecure.run(key, encryptSecureValue(legacyValue));
+      }
+      if ((secureRow?.value || legacyValue) && legacyValue) {
+        clearLegacy.run('', key);
+      }
+    }
+  } catch (err) {
+    console.error('Secure settings migration failed:', err?.message || err);
+  }
+}
+
+function getSecureSetting(key, db = getDbSafe()) {
+  if (!db) return '';
+  ensureSecureSettingsMigrated(db);
+  try {
+    const row = db.prepare('SELECT value FROM secure_settings WHERE key = ?').get(key);
+    if (row?.value) return decryptSecureValue(row.value);
+  } catch (err) {
+    console.error(`Failed to read secure setting ${key}:`, err?.message || err);
+  }
+  try {
+    return String(db.prepare('SELECT value FROM server_settings WHERE key = ?').get(key)?.value || '');
+  } catch {
+    return '';
+  }
+}
+
+function setSecureSetting(key, value, db = getDbSafe()) {
+  if (!db || !SECURE_STORAGE_KEYS.includes(key)) return false;
+  const normalized = String(value || '').trim();
+  if (!normalized) return false;
+  ensureSecureSettingsMigrated(db);
+  db.prepare(`
+    INSERT INTO secure_settings (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+  `).run(key, encryptSecureValue(normalized));
+  db.prepare('UPDATE server_settings SET value = ? WHERE key = ?').run('', key);
+  return true;
+}
+
+function hasSecureSetting(key, db = getDbSafe()) {
+  return !!String(getSecureSetting(key, db) || '').trim();
+}
+
 function readStorageSettings(db = getDbSafe()) {
+  ensureSecureSettingsMigrated(db);
   const settings = {
     storage_provider: 'local',
     storage_s3_endpoint: '',
@@ -65,6 +167,10 @@ function readStorageSettings(db = getDbSafe()) {
     for (const row of rows) settings[row.key] = row.value;
   } catch {
     return settings;
+  }
+
+  for (const key of SECURE_STORAGE_KEYS) {
+    settings[key] = getSecureSetting(key, db);
   }
 
   return settings;
@@ -552,6 +658,7 @@ function getPendingRestoreInfo() {
 module.exports = {
   PENDING_RESTORE_DIR,
   PENDING_RESTORE_ROOT_DIR,
+  SECURE_STORAGE_KEYS,
   STORAGE_KEYS,
   addDirectoryToZip,
   appendActiveUploadsToZip,
@@ -560,16 +667,20 @@ module.exports = {
   decodeUploadUrl,
   deleteUploadByName,
   deleteUploadByUrl,
+  ensureSecureSettingsMigrated,
   generateStoredFilename,
   getPendingRestoreInfo,
+  getSecureSetting,
   getStorageConfig,
   getUploadReadStream,
   getUploadUrl,
+  hasSecureSetting,
   isSafeUploadName,
   migrateLocalUploadsToActiveStorage,
   moveUploadToDeleted,
   readStorageSettings,
   restoreUploadsFromDirectory,
+  setSecureSetting,
   stagePendingRestore,
   storeUploadBuffer,
   testS3Connection
