@@ -1328,6 +1328,42 @@ app.post('/api/upload-server-icon', uploadLimiter, (req, res) => {
   });
 });
 
+app.post('/api/upload-subserver-icon', uploadLimiter, (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  const user = token ? verifyToken(token) : null;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!verifyAdminFromDb(user) && !userHasPermission(user.id, 'manage_server')) {
+    return res.status(403).json({ error: 'Requires admin or Manage Server permission' });
+  }
+
+  upload.single('image')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Server icon must be under 2 MB' });
+    }
+    if (!validateImageMagic(req.file)) return res.status(400).json({ error: 'Failed to validate' });
+    const safeExt = getValidatedImageExtension(req.file.mimetype);
+    if (!safeExt) return res.status(400).json({ error: 'Invalid image' });
+
+    const serverId = parseInt(req.body?.serverId, 10);
+    if (!serverId) return res.status(400).json({ error: 'Missing serverId' });
+
+    (async () => {
+      const saved = await persistUploadedFile(req.file, { forcedExt: safeExt, cacheControl: 'public, max-age=604800, immutable' });
+      const { getDb } = require('./src/database');
+      const db = getDb();
+      const server = db.prepare('SELECT id FROM servers WHERE id = ?').get(serverId);
+      if (!server) return res.status(404).json({ error: 'Server not found' });
+      db.prepare('UPDATE servers SET icon_url = ? WHERE id = ?').run(saved.url, serverId);
+      res.json({ url: saved.url });
+    })().catch((uploadErr) => {
+      console.error('Sub-server icon upload error:', uploadErr);
+      res.status(500).json({ error: 'Failed to save server icon' });
+    });
+  });
+});
+
 // ── GIF endpoint rate limiting (per IP) ──────────────────
 const gifLimitStore = new Map();
 function gifLimiter(req, res, next) {
