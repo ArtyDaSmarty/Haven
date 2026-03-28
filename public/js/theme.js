@@ -1488,6 +1488,7 @@ function initThemeSwitcher(containerId, socket) {
       const theme = btn.dataset.theme;
       document.documentElement.setAttribute('data-theme', theme);
       localStorage.setItem('haven_theme', theme);
+      localStorage.setItem('haven_user_theme_override', '1');
 
       document.querySelectorAll('.theme-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.theme === theme);
