@@ -3589,9 +3589,13 @@ _getCurrentServerMeta() {
 },
 
 _applyThemePreferenceStack() {
+  const selectedServer = this._getCurrentServerMeta?.();
+  if (selectedServer?.theme && selectedServer?.theme_force_override) {
+    applyThemeFromServer(selectedServer.theme);
+    return;
+  }
   const hasUserOverride = localStorage.getItem('haven_user_theme_override') === '1' || !!this.preferences?.theme;
   if (hasUserOverride) return;
-  const selectedServer = this._getCurrentServerMeta?.();
   if (selectedServer?.theme) {
     applyThemeFromServer(selectedServer.theme);
     return;
@@ -3639,9 +3643,11 @@ _refreshSelectedServerSettings() {
   const codeValue = document.getElementById('server-code-value');
   const label = document.getElementById('selected-server-settings-name');
   const themeSelect = document.getElementById('subserver-theme-select');
+  const themeOverride = document.getElementById('subserver-theme-override');
   if (label) label.textContent = server?.name || 'No server selected';
   if (nameInput) nameInput.value = server?.name || '';
   if (themeSelect) themeSelect.value = server?.theme || '';
+  if (themeOverride) themeOverride.checked = !!server?.theme_force_override;
   if (codeValue) codeValue.textContent = server?.code || '—';
   if (preview) {
     preview.innerHTML = server?.icon_url
@@ -3857,29 +3863,32 @@ _setupMobileSidebarServers() {
 
 _prepareSettingsLayout() {
   const storageNav = document.querySelector('.settings-nav-item[data-target="section-storage"]');
-  if (storageNav) storageNav.textContent = 'Upload Storage';
+  if (storageNav) storageNav.textContent = '☁️ Upload Storage';
+  const storageTitle = document.querySelector('#section-storage .settings-section-subtitle');
+  if (storageTitle) storageTitle.textContent = '☁️ Upload Storage';
 
   const logoutBtn = document.getElementById('settings-logout-btn');
   const settingsBody = document.querySelector('#settings-modal .settings-body');
   const settingsNav = document.getElementById('settings-nav');
   const adminGroup = settingsNav?.querySelector('.settings-nav-group.settings-nav-admin');
-  if (settingsBody && settingsNav && !document.getElementById('section-session-user')) {
-    const navItem = document.createElement('div');
-    navItem.className = 'settings-nav-item';
-    navItem.dataset.target = 'section-session-user';
-    navItem.textContent = 'Logout';
-    settingsNav.insertBefore(navItem, adminGroup || null);
+  document.getElementById('section-session-user')?.remove();
+  const sessionSection = document.getElementById('section-session');
+  if (settingsBody && settingsNav && sessionSection) {
+    sessionSection.id = 'section-logout';
+    const title = sessionSection.querySelector('.settings-section-subtitle');
+    const hint = sessionSection.querySelector('.settings-hint');
+    if (title) title.textContent = '💀 Logout';
+    if (hint) hint.textContent = 'Log out before switching to another instance.';
+    settingsBody.appendChild(sessionSection);
 
-    const section = document.createElement('div');
-    section.className = 'settings-section';
-    section.id = 'section-session-user';
-    section.innerHTML = `
-      <h5 class="settings-section-title">💀 Logout</h5>
-      <p class="settings-hint" style="margin-bottom:8px;">Log out before switching to another instance.</p>
-      <button class="btn-sm btn-full" id="settings-logout-btn-clone">Logout</button>
-    `;
-    settingsBody.insertBefore(section, document.getElementById('admin-mod-panel'));
-    section.querySelector('#settings-logout-btn-clone')?.addEventListener('click', () => logoutBtn?.click());
+    let navItem = settingsNav.querySelector('.settings-nav-item[data-target="section-logout"]');
+    if (!navItem) {
+      navItem = document.createElement('div');
+      navItem.className = 'settings-nav-item';
+      navItem.dataset.target = 'section-logout';
+      settingsNav.insertBefore(navItem, adminGroup || null);
+    }
+    navItem.textContent = '💀 Logout';
   }
 
   if (settingsNav && !document.querySelector('.settings-nav-item[data-target="section-server-customization"]')) {
@@ -3889,11 +3898,11 @@ _prepareSettingsLayout() {
     const customization = document.createElement('div');
     customization.className = 'settings-nav-item';
     customization.dataset.target = 'section-server-customization';
-    customization.textContent = 'Customization';
+    customization.textContent = '🎨 Customization';
     const channels = document.createElement('div');
     channels.className = 'settings-nav-item';
     channels.dataset.target = 'section-server-channels';
-    channels.textContent = 'Channels';
+    channels.textContent = '📋 Channels';
     settingsNav.insertBefore(serverGroup, adminGroup || null);
     settingsNav.insertBefore(customization, adminGroup || null);
     settingsNav.insertBefore(channels, adminGroup || null);
@@ -3903,7 +3912,7 @@ _prepareSettingsLayout() {
   if (subserverSection && subserverSection.id !== 'section-server-customization') {
     subserverSection.id = 'section-server-customization';
     const title = subserverSection.querySelector('.settings-section-subtitle');
-    if (title) title.textContent = 'Selected Server';
+    if (title) title.textContent = '🎨 Customization';
     if (!document.getElementById('subserver-theme-select')) {
       const label = document.createElement('label');
       label.className = 'select-row';
@@ -3936,6 +3945,16 @@ _prepareSettingsLayout() {
       `;
       subserverSection.insertBefore(label, subserverSection.querySelector('.server-icon-upload-area'));
     }
+    if (!document.getElementById('subserver-theme-override')) {
+      const toggle = document.createElement('label');
+      toggle.className = 'checkbox-row';
+      toggle.style.cssText = 'margin:8px 0 0;display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;';
+      toggle.innerHTML = `
+        <input type="checkbox" id="subserver-theme-override" style="width:14px;height:14px">
+        <span>Theme Override</span>
+      `;
+      subserverSection.insertBefore(toggle, subserverSection.querySelector('.server-icon-upload-area'));
+    }
   }
 
   if (settingsBody && !document.getElementById('section-server-channels')) {
@@ -3944,7 +3963,7 @@ _prepareSettingsLayout() {
     section.id = 'section-server-channels';
     section.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);';
     section.innerHTML = `
-      <h5 class="settings-section-subtitle">Channels</h5>
+      <h5 class="settings-section-subtitle">📋 Channels</h5>
       <small class="settings-hint">Create and organize channels for the selected server here.</small>
       <div id="server-channels-settings-slot" style="margin-top:8px;"></div>
       <button class="btn-sm btn-full" id="server-organize-channels-btn" style="margin-top:8px">Open Channel Organizer</button>
@@ -3970,7 +3989,7 @@ _prepareSettingsLayout() {
     section.id = 'section-data-monitoring';
     section.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);';
     section.innerHTML = `
-      <h5 class="settings-section-subtitle">Data Monitoring</h5>
+      <h5 class="settings-section-subtitle">🖥️ Data Monitoring</h5>
       <div id="data-monitoring-list" style="margin-top:8px"><p class="muted-text">Loading data usage...</p></div>
     `;
     settingsBody.querySelector('#admin-mod-panel')?.insertBefore(section, document.getElementById('section-uploads') || null);
@@ -3981,8 +4000,31 @@ _prepareSettingsLayout() {
     navItem.className = 'settings-nav-item settings-nav-admin';
     navItem.dataset.target = 'section-data-monitoring';
     navItem.style.display = 'none';
-    navItem.textContent = 'Data Monitoring';
+    navItem.textContent = '🖥️ Data Monitoring';
     settingsNav.insertBefore(navItem, document.querySelector('.settings-nav-item[data-target="section-uploads"]'));
+  }
+
+  if (settingsBody && !document.getElementById('section-admin-password-reset')) {
+    const section = document.createElement('div');
+    section.className = 'admin-settings';
+    section.id = 'section-admin-password-reset';
+    section.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);';
+    section.innerHTML = `
+      <h5 class="settings-section-subtitle">🔑 Password Reset</h5>
+      <small class="settings-hint">Open the member manager and use Reset Password on a user when they need help getting back in.</small>
+      <button class="btn-sm btn-full" id="admin-password-reset-open-btn" style="margin-top:8px">Open Member Manager</button>
+    `;
+    settingsBody.querySelector('#admin-mod-panel')?.insertBefore(section, document.getElementById('section-whitelist') || null);
+    section.querySelector('#admin-password-reset-open-btn')?.addEventListener('click', () => this._openAllMembersModal?.());
+  }
+
+  if (settingsNav && !document.querySelector('.settings-nav-item[data-target="section-admin-password-reset"]')) {
+    const navItem = document.createElement('div');
+    navItem.className = 'settings-nav-item settings-nav-admin';
+    navItem.dataset.target = 'section-admin-password-reset';
+    navItem.style.display = 'none';
+    navItem.textContent = '🔑 Password Reset';
+    settingsNav.insertBefore(navItem, document.querySelector('.settings-nav-item[data-target="section-whitelist"]'));
   }
 },
 
