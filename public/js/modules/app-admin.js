@@ -399,6 +399,7 @@ _renderWebhooksList(webhooks) {
 
 _syncSettingsNav() {
   const isAdmin = document.getElementById('admin-mod-panel')?.style.display !== 'none';
+  const canManageServer = !!(this.user?.isAdmin || this._hasPerm('manage_server'));
   document.querySelectorAll('.settings-nav-admin').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
@@ -417,11 +418,15 @@ _syncSettingsNav() {
   if (rolesNavItem && !isAdmin && this._hasPerm('manage_roles')) {
     rolesNavItem.style.display = '';
   }
-  // Show Server settings tab for users with manage_server permission
-  const serverNavItem = document.querySelector('.settings-nav-item[data-target="section-server"]');
-  if (serverNavItem && !isAdmin && this._hasPerm('manage_server')) {
-    serverNavItem.style.display = '';
-  }
+  document.querySelector('.settings-nav-item[data-target="section-invite"]')?.style.setProperty('display', '');
+  document.querySelector('.settings-nav-item[data-target="section-server-customization"]')?.style.setProperty('display', canManageServer ? '' : 'none');
+  document.querySelector('.settings-nav-item[data-target="section-server-channels"]')?.style.setProperty('display', canManageServer ? '' : 'none');
+  const serverCustomization = document.getElementById('section-server-customization');
+  if (serverCustomization) serverCustomization.style.display = canManageServer ? '' : 'none';
+  const serverChannels = document.getElementById('section-server-channels');
+  if (serverChannels) serverChannels.style.display = canManageServer ? '' : 'none';
+  const serverInvite = document.getElementById('section-invite');
+  if (serverInvite) serverInvite.style.display = '';
 },
 
 _snapshotAdminSettings() {
@@ -439,7 +444,8 @@ _snapshotAdminSettings() {
     max_proxy_avatar_kb: this.serverSettings.max_proxy_avatar_kb || '256',
     max_poll_options: this.serverSettings.max_poll_options || '10',
     default_theme: this.serverSettings.default_theme || '',
-    subserver_name: this._getCurrentServerMeta?.()?.name || ''
+    subserver_name: this._getCurrentServerMeta?.()?.name || '',
+    subserver_theme_override: !!this._getCurrentServerMeta?.()?.theme_force_override
   };
   // Load webhooks list for admin preview
   if (this.user?.isAdmin) {
@@ -490,7 +496,6 @@ _saveAdminSettings() {
     this.socket.emit('update-server-setting', { key: 'cleanup_max_size_mb', value: cleanSize });
     changed = true;
   }
-
   const wlEnabled = document.getElementById('whitelist-enabled')?.checked ? 'true' : 'false';
   if (wlEnabled !== snap.whitelist_enabled) {
     this.socket.emit('whitelist-toggle', { enabled: wlEnabled === 'true' });
@@ -536,11 +541,15 @@ _saveAdminSettings() {
 
   const selectedServer = this._getCurrentServerMeta?.();
   const subserverName = document.getElementById('subserver-name-input')?.value.trim() || '';
-  if (selectedServer?.id && subserverName && subserverName !== (snap.subserver_name || '')) {
+  const subserverTheme = document.getElementById('subserver-theme-select')?.value || '';
+  const subserverThemeOverride = !!document.getElementById('subserver-theme-override')?.checked;
+  if (selectedServer?.id && ((subserverName && subserverName !== (snap.subserver_name || '')) || subserverTheme !== (selectedServer.theme || '') || subserverThemeOverride !== !!snap.subserver_theme_override)) {
     this.socket.emit('update-subserver', {
       serverId: selectedServer.id,
       name: subserverName,
-      iconUrl: selectedServer.icon_url || ''
+      iconUrl: selectedServer.icon_url || '',
+      theme: subserverTheme,
+      themeForceOverride: subserverThemeOverride
     }, (res) => {
       if (!res?.error) this.socket.emit('get-servers');
     });
@@ -586,6 +595,8 @@ _cancelAdminSettings() {
     if (dt) dt.value = snap.default_theme || '';
     const ssn = document.getElementById('subserver-name-input');
     if (ssn) ssn.value = snap.subserver_name || '';
+    const sto = document.getElementById('subserver-theme-override');
+    if (sto) sto.checked = !!snap.subserver_theme_override;
   }
   document.getElementById('settings-modal').style.display = 'none';
 },
@@ -1656,46 +1667,6 @@ _setupResizableSidebars() {
     });
   }
 
-  // Sidebar split handle (channels/DM divider)
-  const splitHandle = document.getElementById('sidebar-split-handle');
-  const splitContainer = document.getElementById('sidebar-split');
-  const channelsPane = document.getElementById('channels-pane');
-  const dmPane = document.getElementById('dm-pane');
-  if (splitHandle && splitContainer && channelsPane && dmPane) {
-    const savedRatio = localStorage.getItem('haven_sidebar_split_ratio');
-    if (savedRatio) {
-      channelsPane.style.flex = `${savedRatio} 1 0`;
-      dmPane.style.flex = `${1 - parseFloat(savedRatio)} 1 0`;
-    }
-
-    let dragging = false;
-    splitHandle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      splitHandle.classList.add('dragging');
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      const rect = splitContainer.getBoundingClientRect();
-      const y = e.clientY - rect.top;
-      const total = rect.height;
-      let ratio = y / total;
-      ratio = Math.max(0.05, Math.min(0.95, ratio));
-      channelsPane.style.flex = `${ratio} 1 0`;
-      dmPane.style.flex = `${1 - ratio} 1 0`;
-    });
-    document.addEventListener('mouseup', () => {
-      if (!dragging) return;
-      dragging = false;
-      splitHandle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      const chFlex = parseFloat(channelsPane.style.flex) || 0.6;
-      localStorage.setItem('haven_sidebar_split_ratio', chFlex);
-    });
-  }
 },
 
 // ═══════════════════════════════════════════════════════

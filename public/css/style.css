@@ -7795,6 +7795,9 @@ html.rgb-cycling *::after {
 }
 
 .settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 10px;
   font-size: 12px;
   color: var(--text-secondary);

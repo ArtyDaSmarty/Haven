@@ -155,6 +155,13 @@ router.post('/register', async (req, res) => {
       }
     } catch { /* non-critical */ }
 
+    try {
+      const announcements = db.prepare("SELECT id FROM channels WHERE special_section = 'announcements' LIMIT 1").get();
+      if (announcements?.id) {
+        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(announcements.id, result.lastInsertRowid);
+      }
+    } catch { /* non-critical */ }
+
     const token = jwt.sign(
       { id: result.lastInsertRowid, username, isAdmin: !!isAdmin, displayName: username, pwv: 1 },
       JWT_SECRET,
@@ -603,6 +610,63 @@ router.post('/change-password', async (req, res) => {
     }
   } catch (err) {
     console.error('Change password error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/admin/reset-password', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const decoded = verifyToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Unauthorized' });
+
+    const targetUserId = Number(req.body.userId);
+    const newPassword = typeof req.body.newPassword === 'string' ? req.body.newPassword : '';
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    if (newPassword.length < 8 || newPassword.length > 128) {
+      return res.status(400).json({ error: 'New password must be 8-128 characters' });
+    }
+
+    const db = getDb();
+    const actor = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(decoded.id);
+    if (!actor?.is_admin) return res.status(403).json({ error: 'Only admins can reset passwords' });
+
+    const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(targetUserId);
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    const newVersion = (targetUser.password_version || 1) + 1;
+    db.prepare(`
+      UPDATE users SET
+        password_hash = ?,
+        password_version = ?,
+        totp_secret = NULL,
+        totp_enabled = 0,
+        public_key = NULL,
+        encrypted_private_key = NULL,
+        e2e_key_salt = NULL,
+        e2e_secret = NULL
+      WHERE id = ?
+    `).run(hash, newVersion, targetUser.id);
+    db.prepare('DELETE FROM totp_backup_codes WHERE user_id = ?').run(targetUser.id);
+    db.prepare('DELETE FROM account_recovery_codes WHERE user_id = ?').run(targetUser.id);
+
+    const io = req.app.get('io');
+    if (io) {
+      for (const [, s] of io.sockets.sockets) {
+        if (s.user && s.user.id === targetUser.id) {
+          s.emit('force-logout', { reason: 'password_changed' });
+          s.disconnect(true);
+        }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin reset password error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

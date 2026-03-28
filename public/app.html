@@ -8,9 +8,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
   <link rel="manifest" href="/manifest.webmanifest">
-  <title>Haven</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cG9seWdvbiBwb2ludHM9IjUwLDMgOTMsMjggOTMsNzIgNTAsOTcgNyw3MiA3LDI4IiBmaWxsPSJub25lIiBzdHJva2U9IiM2YjRmZGIiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjx0ZXh0IHg9IjUwIiB5PSI2MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsLEhlbHZldGljYSxzYW5zLXNlcmlmIiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1zaXplPSIzOCIgZmlsbD0iIzZiNGZkYiIgb3BhY2l0eT0iMC45NSI+SDwvdGV4dD48L3N2Zz4=">
-  <link rel="stylesheet" href="/css/style.css?v=2.7.10">
+  <title>Sanctuary</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/css/style.css?v=2.0">
   <script src="/js/theme-init.js"></script>
 </head>
 <body>
@@ -20,6 +20,15 @@
 
       <!-- ─── Server Bar (far left — sub-servers in this Haven instance) ─────── -->
       <nav class="server-bar" id="server-bar">
+        <div class="server-icon dm-bubble" id="dm-server-bubble" title="Direct Messages">
+          <span class="dm-unread-count" id="dm-server-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;line-height:18px;font-size:0.72rem;padding:0 5px;border-radius:999px;background:#ff5d73;color:#fff;text-align:center;"></span>
+          <span class="server-icon-text">💬</span>
+        </div>
+        <div class="server-icon dm-bubble" id="announcements-server-bubble" title="Admin Announcements">
+          <span class="dm-unread-count" id="announcements-server-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;line-height:18px;font-size:0.72rem;padding:0 5px;border-radius:999px;background:#8b5cf6;color:#fff;text-align:center;"></span>
+          <span class="server-icon-text">📣</span>
+        </div>
+        <div class="server-separator"></div>
         <div class="server-icon home active" id="home-server" title="Main">
           <span class="server-icon-text">⬡</span>
           <span class="server-status-dot online"></span>
@@ -29,7 +38,8 @@
         <button class="server-icon add-server" id="add-server-btn" title="Add Server">
           <span class="server-icon-text">+</span>
         </button>
-        <button class="server-icon manage-servers" id="manage-servers-btn" title="Manage Servers">
+        <div style="flex:1"></div>
+        <button class="server-icon manage-servers" id="manage-servers-btn" title="Settings">
           <span class="server-icon-text">⚙</span>
         </button>
       </nav>
@@ -40,7 +50,7 @@
         <div class="sidebar-header">
           <div class="brand">
             <span class="logo-sm">⬡</span>
-            <span class="brand-text">HAVEN</span>
+            <span class="brand-text">SANCTUARY</span>
           </div>
           <button id="mobile-sidebar-close" class="mobile-panel-close" title="Close" aria-label="Close sidebar">&times;</button>
           <div class="user-bar">
@@ -50,7 +60,7 @@
               <span class="login-name" id="login-name" title="Your login username"></span>
             </div>
             <button id="rename-btn" class="icon-btn small" title="Change display name">✏️</button>
-            <button id="logout-btn" class="icon-btn" title="Logout">
+            <button id="logout-btn" class="icon-btn" title="Logout" style="display:none">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                 <polyline points="16 17 21 12 16 7"/>
@@ -65,7 +75,7 @@
           <div class="sidebar-section mobile-servers-section" id="mobile-servers-section">
             <h5 class="section-label mobile-servers-toggle" id="mobile-servers-toggle" style="cursor:pointer;user-select:none">
               <span class="collapse-toggle-arrow" id="mobile-servers-arrow">▾</span>
-              <span class="section-label-text" style="flex:1">Servers</span>
+              <span class="section-label-text" style="flex:1">Instances</span>
             </h5>
             <div class="mobile-servers-row" id="mobile-servers-row">
               <div class="mobile-servers-scroll" id="mobile-servers-scroll"></div>
@@ -126,9 +136,8 @@
             <h5 class="section-label channels-toggle" id="channels-toggle" style="cursor:pointer;user-select:none"><span class="channels-toggle-arrow" id="channels-toggle-arrow">▾</span><span class="section-label-text" style="flex:1">Channels</span><button class="icon-btn small" id="sub-channel-panel-btn" title="Sub-channel subscriptions" style="font-size:0.85rem;padding:2px 6px;opacity:0.6;position:relative;z-index:2;display:none">📡</button><button class="icon-btn small admin-only" id="organize-channels-btn" title="Organize channels" style="display:none;font-size:0.85rem;padding:2px 6px;opacity:0.6;position:relative;z-index:2">📋</button></h5>
             <div class="channel-list" id="channel-list"></div>
           </div>
-          <div class="sidebar-split-handle" id="sidebar-split-handle" title="Drag to resize"></div>
           <div class="sidebar-section dm-section-pane" id="dm-pane">
-            <h5 class="section-label dm-section-label dm-toggle" id="dm-toggle-header" style="cursor:pointer;user-select:none"><span class="dm-toggle-arrow" id="dm-toggle-arrow">▾</span><span class="section-label-text" style="flex:1">Direct Messages</span><span style="display:flex;align-items:center;gap:4px;position:relative;z-index:2"><span class="dm-unread-count" id="dm-unread-badge" style="display:none"></span><button class="icon-btn small" id="organize-dms-btn" title="Organize DMs" style="font-size:0.85rem;padding:2px 6px;opacity:0.6">📋</button></span></h5>
+            <h5 class="section-label dm-section-label dm-toggle" id="dm-toggle-header" style="cursor:pointer;user-select:none"><span class="dm-toggle-arrow" id="dm-toggle-arrow">▾</span><span class="section-label-text" style="flex:1">Direct Messages</span><span style="display:flex;align-items:center;gap:4px;position:relative;z-index:2"><span class="dm-unread-count" id="dm-section-badge" style="display:none"></span><button class="icon-btn small" id="organize-dms-btn" title="Organize DMs" style="font-size:0.85rem;padding:2px 6px;opacity:0.6">📋</button></span></h5>
             <div class="dm-list-scroll" id="dm-list"></div>
           </div>
         </div>
@@ -345,7 +354,7 @@
         <div id="no-channel-msg" class="welcome-screen">
           <div class="welcome-content">
             <div class="welcome-icon">⬡</div>
-            <h2>Welcome to Haven</h2>
+            <h2>Welcome to Sanctuary</h2>
             <p>Join a channel with a code from your friends,<br>
                or create one if you're the admin.</p>
           </div>
@@ -1016,10 +1025,9 @@
           <div class="settings-nav-item settings-nav-admin" data-target="section-branding" style="display:none">🏠 Branding</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-members" style="display:none">👥 Members</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-whitelist" style="display:none">🛡️ Whitelist</div>
-          <div class="settings-nav-item settings-nav-admin" data-target="section-invite" style="display:none">🌐 Invite Code</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-cleanup" style="display:none">🗑️ Cleanup</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-uploads" style="display:none">📁 Limits</div>
-          <div class="settings-nav-item settings-nav-admin" data-target="section-storage" style="display:none">☁️ Storage</div>
+          <div class="settings-nav-item settings-nav-admin" data-target="section-storage" style="display:none">☁️ Upload Storage</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-sounds-admin" style="display:none">🔊 Sounds</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-emojis" style="display:none">😎 Emojis</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-roles" style="display:none">👑 Roles</div>
@@ -1617,8 +1625,8 @@
           <button class="btn-sm btn-full" id="run-cleanup-now-btn" style="margin-top:4px;">🧹 Run Cleanup Now</button>
         </div>
         <div class="admin-settings" id="section-session" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
-          <h5 class="settings-section-subtitle">🔐 Session</h5>
-          <small class="settings-hint">Log out before switching to another Haven instance.</small>
+          <h5 class="settings-section-subtitle">💀 Logout</h5>
+          <small class="settings-hint">Log out before switching to another instance.</small>
           <button class="btn-sm btn-full" id="settings-logout-btn" style="margin-top:8px">Logout</button>
         </div>
         <div class="admin-settings" id="section-uploads" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
@@ -1650,7 +1658,7 @@
           <small class="settings-hint">Maximum proxy avatar upload size (32-2048 KB, default 256)</small>
         </div>
         <div class="admin-settings" id="section-storage" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
-          <h5 class="settings-section-subtitle">☁️ Storage</h5>
+          <h5 class="settings-section-subtitle">☁️ Upload Storage</h5>
           <div id="storage-configured-panel" style="display:none;margin:8px 0 10px 0;padding:10px;border:1px solid var(--border);border-radius:10px;background:rgba(91,196,140,0.08);">
             <div id="storage-configured-title" style="font-weight:700;">S3 storage is configured.</div>
             <small class="settings-hint" id="storage-configured-summary" style="display:block;margin-top:4px;"></small>
@@ -2726,8 +2734,8 @@
   <script src="/js/servers.js?v=2.6.0"></script>
   <script src="/js/voice.js?v=2.6.0"></script>
   <script src="/js/modmode.js?v=2.6.0"></script>
-  <script src="/js/e2e.js?v=2.6.0"></script>
-  <script type="module" src="/js/app.js?v=2.7.10"></script>
-  <script src="/js/plugin-loader.js?v=2.6.0"></script>
+  <script src="/js/e2e.js?v=2.0"></script>
+  <script type="module" src="/js/app.js?v=2.0"></script>
+  <script src="/js/plugin-loader.js?v=2.0"></script>
 </body>
 </html>

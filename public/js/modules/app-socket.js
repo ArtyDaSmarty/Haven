@@ -56,9 +56,9 @@ _setupSocketListeners() {
       this._initE2E();
     }
     // Show server version in status bar
-    if (data.version) {
+    {
       const vEl = document.getElementById('status-version');
-      if (vEl) vEl.textContent = 'v' + data.version;
+      if (vEl) vEl.textContent = 'v2.0';
     }
     // Refresh display name + admin UI with authoritative data
     document.getElementById('current-user').textContent = this.user.displayName || this.user.username;
@@ -73,7 +73,7 @@ _setupSocketListeners() {
     if (this.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
-      document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard')) ? 'block' : 'none';
+      document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     }
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
   });
@@ -88,7 +88,7 @@ _setupSocketListeners() {
     const canModerate = this.user.isAdmin || this.user.effectiveLevel >= 25;
     const canCreateChannel = this.user.isAdmin || this._hasPerm('create_channel');
     document.getElementById('admin-controls').style.display = canCreateChannel ? 'block' : 'none';
-    document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard')) ? 'block' : 'none';
+    document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     this._showToast('Your roles have been updated', 'info');
   });
@@ -110,6 +110,7 @@ _setupSocketListeners() {
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     if (typeof this._refreshSelectedServerSettings === 'function') this._refreshSelectedServerSettings();
     if (typeof this._renderChannels === 'function') this._renderChannels();
+    if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
   });
 
   this.socket.on('server-joined', (data) => {
@@ -132,6 +133,7 @@ _setupSocketListeners() {
     this.socket.emit('get-channels');
     this.socket.emit('get-server-settings');
     if (this.currentChannel) {
+      const currentChannelMeta = this.channels?.find(c => c.code === this.currentChannel);
       this.socket.emit('enter-channel', { code: this.currentChannel });
       // Reset pagination — reconnect replaces message list
       this._oldestMsgId = null;
@@ -143,9 +145,11 @@ _setupSocketListeners() {
       this._loadingFuture = false;
       this._historyAfter = null;
       this.socket.emit('get-messages', { code: this.currentChannel });
-      this.socket.emit('get-channel-members', { code: this.currentChannel });
-      // Request fresh voice list for this channel
-      this.socket.emit('request-voice-users', { code: this.currentChannel });
+      if (currentChannelMeta?.special_section !== 'announcements') {
+        this.socket.emit('get-channel-members', { code: this.currentChannel });
+        // Request fresh voice list for this channel
+        this.socket.emit('request-voice-users', { code: this.currentChannel });
+      }
     }
     // Re-join voice if we were in voice before reconnect
     if (this.voice && this.voice.inVoice && this.voice.currentChannel) {
@@ -195,6 +199,7 @@ _setupSocketListeners() {
       if (sinceLast < 3000) return;
       // Re-fetch current channel messages + member list to catch anything missed
       if (this.currentChannel && this.socket?.connected) {
+        const currentChannelMeta = this.channels?.find(c => c.code === this.currentChannel);
         this._oldestMsgId = null;
         this._noMoreHistory = false;
         this._loadingHistory = false;
@@ -204,7 +209,9 @@ _setupSocketListeners() {
         this._loadingFuture = false;
         this._historyAfter = null;
         this.socket.emit('get-messages', { code: this.currentChannel });
-        this.socket.emit('get-channel-members', { code: this.currentChannel });
+        if (currentChannelMeta?.special_section !== 'announcements') {
+          this.socket.emit('get-channel-members', { code: this.currentChannel });
+        }
       }
       // Re-fetch channels in case list changed while backgrounded
       this.socket?.emit('get-channels');
@@ -328,7 +335,9 @@ _setupSocketListeners() {
         this._loadingFuture = false;
         this._historyAfter = null;
         this.socket.emit('get-messages', { code: this.currentChannel });
-        this.socket.emit('get-channel-members', { code: this.currentChannel });
+        if (updated.special_section !== 'announcements') {
+          this.socket.emit('get-channel-members', { code: this.currentChannel });
+        }
       }
     }
   });
@@ -854,7 +863,7 @@ _setupSocketListeners() {
     if (data.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
-      document.getElementById('admin-mod-panel').style.display = 'none';
+      document.getElementById('admin-mod-panel').style.display = (this._canModerate() || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     }
   });
 
@@ -1067,6 +1076,7 @@ _setupSocketListeners() {
   this.socket.on('server-settings', (settings) => {
     this.serverSettings = settings;
     this._applyServerSettings();
+    if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
     this._maybeShowSetupWizard();
   });
 
@@ -1095,14 +1105,18 @@ _setupSocketListeners() {
 
   // ── User preferences (persistent theme etc.) ───────
   this.socket.on('preferences', (prefs) => {
-    if (prefs.theme) {
-      // User has a saved personal theme preference — apply it
+    this.preferences = prefs || {};
+    const selectedServer = (this.servers || []).find(s => s.id === this.currentServerId);
+    if (selectedServer?.theme && selectedServer?.theme_force_override) {
+      applyThemeFromServer(selectedServer.theme);
+    } else if (prefs.theme) {
       applyThemeFromServer(prefs.theme);
-    } else if (localStorage.getItem('haven_theme')) {
-      // Preserve the user's locally chosen theme/effect combo if no saved server-side preference exists yet.
+      localStorage.setItem('haven_user_theme_override', '1');
+    } else if (localStorage.getItem('haven_user_theme_override') === '1' && localStorage.getItem('haven_theme')) {
       applyThemeFromServer(localStorage.getItem('haven_theme'));
+    } else if (selectedServer?.theme) {
+      applyThemeFromServer(selectedServer.theme);
     } else if (this.serverSettings.default_theme) {
-      // No personal preference — apply the server's default theme
       applyThemeFromServer(this.serverSettings.default_theme);
     }
   });

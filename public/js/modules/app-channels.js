@@ -14,9 +14,12 @@ async switchChannel(code) {
   this._coupledToBottom = true;
   const channel = this.channels.find(c => c.code === code);
   const isDm = channel && channel.is_dm;
+  const isAnnouncementHub = channel && channel.special_section === 'announcements';
   const isForum = channel && channel.channel_type === 'forum';
   const isForumPost = this._isForumPostChannel(channel);
-  const displayName = isDm && channel.dm_target
+  const displayName = isAnnouncementHub
+    ? '📣 Admin Announcements'
+    : isDm && channel.dm_target
     ? `@ ${this._getNickname(channel.dm_target.id, channel.dm_target.username)}`
     : channel ? `# ${channel.name}` : code;
 
@@ -26,13 +29,13 @@ async switchChannel(code) {
   if (headerEl) { delete headerEl.dataset.originalText; headerEl._scrambling = false; }
   const displayCode = channel ? (channel.display_code || code) : code;
   const isMaskedCode = (displayCode === '••••••••');
-  document.getElementById('channel-code-display').textContent = isDm ? '' : displayCode;
-  document.getElementById('copy-code-btn').style.display = (isDm || isMaskedCode) ? 'none' : 'inline-flex';
+  document.getElementById('channel-code-display').textContent = (isDm || isAnnouncementHub) ? '' : displayCode;
+  document.getElementById('copy-code-btn').style.display = (isDm || isAnnouncementHub || isMaskedCode) ? 'none' : 'inline-flex';
 
   // Show channel code settings gear for admins / users with create_channel on non-DM channels
   const codeSettingsBtn = document.getElementById('channel-code-settings-btn');
   if (codeSettingsBtn) {
-    codeSettingsBtn.style.display = (!isDm && (this.user.isAdmin || this._hasPerm('create_channel'))) ? 'inline-flex' : 'none';
+    codeSettingsBtn.style.display = (!isDm && !isAnnouncementHub && (this.user.isAdmin || this._hasPerm('create_channel'))) ? 'inline-flex' : 'none';
   }
 
   // Show the header actions box
@@ -52,6 +55,12 @@ async switchChannel(code) {
     const mobileJoin = document.getElementById('voice-join-mobile');
     if (mobileJoin) mobileJoin.style.display = channel && channel.voice_enabled === 0 ? 'none' : '';
   }
+  const rightSidebar = document.getElementById('right-sidebar');
+  const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+  const sidebarMembersBtn = document.getElementById('sidebar-members-btn');
+  if (rightSidebar) rightSidebar.style.display = isAnnouncementHub ? 'none' : '';
+  if (sidebarToggleBtn) sidebarToggleBtn.style.display = isAnnouncementHub ? 'none' : '';
+  if (sidebarMembersBtn) sidebarMembersBtn.style.display = isAnnouncementHub ? 'none' : '';
   document.getElementById('search-toggle-btn').style.display = isForum ? 'none' : '';
   document.getElementById('pinned-toggle-btn').style.display = isForum ? 'none' : '';
   const forumOriginalBtn = document.getElementById('forum-original-post-btn');
@@ -60,7 +69,7 @@ async switchChannel(code) {
   // Show "Select messages" button for admins/mods on non-DM channels
   const moveSelectBtn = document.getElementById('move-select-btn');
   if (moveSelectBtn) {
-    const canMove = !isDm && !isForum && (this.user.isAdmin || this._canModerate());
+    const canMove = !isDm && !isAnnouncementHub && !isForum && (this.user.isAdmin || this._canModerate());
     moveSelectBtn.style.display = canMove ? 'inline-flex' : 'none';
   }
   // Exit selection mode when switching channels
@@ -73,7 +82,8 @@ async switchChannel(code) {
   const msgInputArea = document.getElementById('message-input-area');
   const _textOff = channel && channel.text_enabled === 0;
   const _mediaOff = channel && channel.media_enabled === 0;
-  if (msgInputArea) msgInputArea.style.display = (_textOff && _mediaOff) ? 'none' : '';
+  const _readOnlyAnnouncements = !!(isAnnouncementHub && !this.user?.isAdmin);
+  if (msgInputArea) msgInputArea.style.display = ((_textOff && _mediaOff) || _readOnlyAnnouncements) ? 'none' : '';
   // Text-only elements
   const _msgInput = document.getElementById('message-input');
   const _sendBtn = document.getElementById('send-btn');
@@ -109,7 +119,7 @@ async switchChannel(code) {
   this._updateBadge(code);
 
   document.getElementById('status-channel').textContent = isDm && channel.dm_target
-    ? `DM: ${channel.dm_target.username}` : channel ? channel.name : code;
+    ? `DM: ${channel.dm_target.username}` : isAnnouncementHub ? 'Admin Announcements' : channel ? channel.name : code;
 
   // Reset pagination state for the new channel
   this._oldestMsgId = null;
@@ -128,14 +138,18 @@ async switchChannel(code) {
     // E2E: fetch DM partner's public key BEFORE requesting messages
     if (isDm && channel) await this._fetchDMPartnerKey(channel);
     this.socket.emit('get-messages', { code });
-    this.socket.emit('get-channel-members', { code });
-    this.socket.emit('request-voice-users', { code });
+    if (!isAnnouncementHub) {
+      this.socket.emit('get-channel-members', { code });
+      this.socket.emit('request-voice-users', { code });
+    } else {
+      this.channelMembers = [];
+    }
   }
   this._clearReply();
 
   // Auto-focus the message input for quick typing
   const msgInput = document.getElementById('message-input');
-  if (msgInput && !isForum) setTimeout(() => msgInput.focus(), 50);
+  if (msgInput && !isForum && !_readOnlyAnnouncements) setTimeout(() => msgInput.focus(), 50);
 
   // Show E2E encryption menu only in DM channels
   const e2eWrapper = document.getElementById('e2e-menu-wrapper');
@@ -216,6 +230,7 @@ _renderForumBrowser() {
       <article class="forum-card" data-code="${this._escapeHtml(post.code)}">
         <div class="forum-card-header">
           <h4 class="forum-card-title">${this._escapeHtml(post.name)}</h4>
+          ${post.unreadCount > 0 ? `<span class="forum-card-tag" title="Unread replies in this forum post">🔔 ${post.unreadCount > 99 ? '99+' : post.unreadCount}</span>` : ''}
           ${(post.tag || '') ? `<span class="forum-card-tag">${this._escapeHtml(post.tag)}</span>` : ''}
         </div>
         <div class="forum-card-preview">${this._escapeHtml(post.preview || 'No original post yet.')}</div>
@@ -807,7 +822,7 @@ _openReparentModal(code) {
 _openOrganizeModal(parentCode, serverLevel) {
   if (serverLevel) {
     // Server-level mode: organize top-level channels
-    const parents = this.channels.filter(c => !c.parent_channel_id && !c.is_dm);
+    const parents = this.channels.filter(c => !c.parent_channel_id && !c.is_dm && !c.special_section && c.server_id === this.currentServerId);
     this._organizeParentCode = '__server__';
     this._organizeParentId = null;
     this._organizeServerLevel = true;
@@ -976,7 +991,7 @@ _renderOrganizeList() {
       const sel = this._organizeSelected === ch.code;
       const tagBadge = ch.category ? `<span class="organize-tag-badge">${this._escapeHtml(ch.category)}</span>` : '';
       const icon = this._organizeServerLevel ? '#' : (ch.is_private ? '🔒' : '↳');
-      const hasSubs = this._organizeServerLevel && this.channels.some(c => c.parent_channel_id === ch.id);
+      const hasSubs = this._organizeServerLevel && this.channels.some(c => c.parent_channel_id === ch.id && c.server_id === this.currentServerId);
       const drillHint = hasSubs ? `<span class="organize-drill-hint" title="Double-click to organize sub-channels">▶</span>` : '';
       html += `<div class="organize-item${sel ? ' selected' : ''}${hasSubs ? ' organize-has-subs' : ''}" data-code="${ch.code}">
         <span style="opacity:0.5">${icon}</span>
@@ -1006,7 +1021,7 @@ _renderOrganizeList() {
       el.addEventListener('dblclick', () => {
         const ch = this.channels.find(c => c.code === el.dataset.code);
         if (!ch) return;
-        const hasSubs = this.channels.some(c => c.parent_channel_id === ch.id);
+        const hasSubs = this.channels.some(c => c.parent_channel_id === ch.id && c.server_id === this.currentServerId);
         if (hasSubs) this._openOrganizeModal(ch.code);
       });
     }
@@ -1321,12 +1336,15 @@ _renderChannels() {
     this.currentServerId = this.servers[0].id;
   }
 
-  const regularChannels = this.channels.filter(c => !c.is_dm && c.server_id === this.currentServerId);
+  const regularChannels = this.channels.filter(c => !c.is_dm && !c.special_section && c.server_id === this.currentServerId);
   const dmChannels = this.channels.filter(c => c.is_dm);
+  const announcementChannel = this.channels.find(c => c.special_section === 'announcements');
+  const showingDms = this.sidebarView === 'dms';
+  const showingAnnouncements = this.sidebarView === 'announcements';
 
   if (this.currentChannel) {
     const current = this.channels.find(c => c.code === this.currentChannel);
-    if (current && !current.is_dm && current.server_id !== this.currentServerId) {
+    if (current && !showingDms && !showingAnnouncements && !current.is_dm && !current.special_section && current.server_id !== this.currentServerId) {
       const fallback = regularChannels[0];
       if (fallback) {
         this.currentChannel = fallback.code;
@@ -1346,7 +1364,56 @@ _renderChannels() {
 
   // Show/hide sub-channel panel button based on whether sub-channels exist
   const subPanelBtn = document.getElementById('sub-channel-panel-btn');
-  if (subPanelBtn) subPanelBtn.style.display = Object.keys(subChannelMap).length > 0 ? '' : 'none';
+  if (subPanelBtn) subPanelBtn.style.display = !showingDms && !showingAnnouncements && Object.keys(subChannelMap).length > 0 ? '' : 'none';
+  const channelsToggle = document.getElementById('channels-toggle');
+  if (channelsToggle) {
+    const label = channelsToggle.querySelector('.section-label-text');
+    if (label) label.textContent = showingDms ? 'Direct Messages' : showingAnnouncements ? 'Admin Announcements' : 'Channels';
+  }
+  const dmPane = document.getElementById('dm-pane');
+  if (showingAnnouncements) {
+    if (announcementChannel) {
+      const el = document.createElement('div');
+      el.className = 'channel-item' + (announcementChannel.code === this.currentChannel ? ' active' : '');
+      el.dataset.code = announcementChannel.code;
+      el.innerHTML = `<span class="channel-hash">📣</span><span class="channel-name">${this._escapeHtml(announcementChannel.name)}</span>`;
+      const count = (announcementChannel.code in this.unreadCounts) ? this.unreadCounts[announcementChannel.code] : (announcementChannel.unreadCount || 0);
+      if (count > 0) {
+        const bdg = document.createElement('span');
+        bdg.className = 'channel-badge';
+        bdg.style.background = '#8b5cf6';
+        bdg.textContent = count > 99 ? '99+' : count;
+        el.appendChild(bdg);
+      }
+      el.addEventListener('click', () => this.switchChannel(announcementChannel.code));
+      list.appendChild(el);
+    }
+    if (dmPane) dmPane.style.display = 'none';
+    this._updateAnnouncementSectionBadge();
+    return;
+  }
+  if (showingDms) {
+    dmChannels.forEach(ch => {
+      const el = document.createElement('div');
+      el.className = 'channel-item dm-item' + (ch.code === this.currentChannel ? ' active' : '');
+      el.dataset.code = ch.code;
+      const dmName = ch.dm_target ? this._getNickname(ch.dm_target.id, ch.dm_target.username) : 'Unknown';
+      el.innerHTML = `<span class="channel-hash">@</span><span class="channel-name">${this._escapeHtml(dmName)}</span>`;
+      const count = (ch.code in this.unreadCounts) ? this.unreadCounts[ch.code] : (ch.unreadCount || 0);
+      if (count > 0) {
+        const bdg = document.createElement('span');
+        bdg.className = 'channel-badge';
+        bdg.textContent = count > 99 ? '99+' : count;
+        el.appendChild(bdg);
+      }
+      el.addEventListener('click', () => this.switchChannel(ch.code));
+      list.appendChild(el);
+    });
+    if (dmPane) dmPane.style.display = 'none';
+    this._updateAnnouncementSectionBadge();
+    return;
+  }
+  if (dmPane) dmPane.style.display = 'none';
 
   // Sort sub-channels — respect parent's sort_alphabetical setting & per-tag overrides
   // sort_alphabetical: 0=manual, 1=alpha, 2=created, 3=oldest
@@ -1762,7 +1829,7 @@ _renderChannels() {
 
     // Show/hide DM pane
     const dmPane = document.getElementById('dm-pane');
-    if (dmPane) dmPane.style.display = dmChannels.length ? '' : 'none';
+    if (dmPane) dmPane.style.display = showingDms && dmChannels.length ? '' : 'none';
 
     // ── DM categorization (client-side localStorage) ──
     const dmAssignments = JSON.parse(localStorage.getItem('haven_dm_assignments') || '{}');
@@ -1897,6 +1964,7 @@ _renderChannels() {
   this._voiceCountRefreshTimer = setTimeout(() => {
     if (this.socket?.connected) this.socket.emit('get-voice-counts');
   }, 600);
+  this._updateAnnouncementSectionBadge();
 },
 
 _updateBadge(code) {
@@ -1975,6 +2043,7 @@ _updateBadge(code) {
   // Always update DM section badge, tab title, and desktop badge
   // even if the individual channel item isn't in the DOM
   this._updateDmSectionBadge();
+  this._updateAnnouncementSectionBadge();
   this._updateTabTitle();
   this._updateDesktopBadge();
 },
@@ -1982,7 +2051,7 @@ _updateBadge(code) {
 _updateTabTitle() {
   const validCodes = new Set((this.channels || []).map(c => c.code));
   const total = Object.entries(this.unreadCounts).reduce((s, [k, v]) => validCodes.has(k) ? s + v : s, 0);
-  document.title = total > 0 ? `(${total}) Haven` : 'Haven';
+  document.title = total > 0 ? `(${total}) Sanctuary` : 'Sanctuary';
 },
 
 _updateDesktopBadge() {
@@ -2041,10 +2110,26 @@ _fireNativeNotification(message, channelCode) {
 },
 
 _updateDmSectionBadge() {
-  const badge = document.getElementById('dm-unread-badge');
-  if (!badge) return;
   const dmChannels = (this.channels || []).filter(c => c.is_dm);
   const total = dmChannels.reduce((sum, ch) => sum + (this.unreadCounts[ch.code] || 0), 0);
+  ['dm-server-badge', 'dm-section-badge', 'dm-unread-badge'].forEach((id) => {
+    const badge = document.getElementById(id);
+    if (!badge) return;
+    if (total > 0) {
+      badge.textContent = total > 99 ? '99+' : total;
+      badge.style.display = '';
+    } else {
+      badge.textContent = '';
+      badge.style.display = 'none';
+    }
+  });
+},
+
+_updateAnnouncementSectionBadge() {
+  const channel = (this.channels || []).find(c => c.special_section === 'announcements');
+  const total = channel ? (this.unreadCounts[channel.code] || channel.unreadCount || 0) : 0;
+  const badge = document.getElementById('announcements-server-badge');
+  if (!badge) return;
   if (total > 0) {
     badge.textContent = total > 99 ? '99+' : total;
     badge.style.display = '';
@@ -2115,10 +2200,11 @@ _getVisualChannelOrder() {
   document.querySelectorAll('#channel-list .channel-item:not([style*="display: none"])').forEach(el => {
     if (el.dataset.code) codes.push(el.dataset.code);
   });
-  // DM section
-  document.querySelectorAll('#dm-list .channel-item:not([style*="display: none"])').forEach(el => {
-    if (el.dataset.code) codes.push(el.dataset.code);
-  });
+  if (this.sidebarView === 'dms') {
+    document.querySelectorAll('#dm-list .channel-item:not([style*="display: none"])').forEach(el => {
+      if (el.dataset.code) codes.push(el.dataset.code);
+    });
+  }
   return codes;
 },
 

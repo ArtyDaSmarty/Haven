@@ -118,7 +118,7 @@ if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
 const vapidEmail = process.env.VAPID_EMAIL || 'mailto:admin@haven.local';
 webpush.setVapidDetails(vapidEmail, process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
 
-const { initDatabase } = require('./src/database');
+const { initDatabase, getDb } = require('./src/database');
 const { router: authRoutes, authLimiter, verifyToken } = require('./src/auth');
 const { setupSocketHandlers, sanitizeText } = require('./src/socketHandlers');
 const { startTunnel, stopTunnel, getTunnelStatus, registerProcessCleanup } = require('./src/tunnel');
