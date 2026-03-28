@@ -110,6 +110,7 @@ _setupSocketListeners() {
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     if (typeof this._refreshSelectedServerSettings === 'function') this._refreshSelectedServerSettings();
     if (typeof this._renderChannels === 'function') this._renderChannels();
+    if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
   });
 
   this.socket.on('server-joined', (data) => {
@@ -1067,6 +1068,7 @@ _setupSocketListeners() {
   this.socket.on('server-settings', (settings) => {
     this.serverSettings = settings;
     this._applyServerSettings();
+    if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
     this._maybeShowSetupWizard();
   });
 
@@ -1095,12 +1097,15 @@ _setupSocketListeners() {
 
   // ── User preferences (persistent theme etc.) ───────
   this.socket.on('preferences', (prefs) => {
+    this.preferences = prefs || {};
     if (prefs.theme) {
       // User has a saved personal theme preference — apply it
       applyThemeFromServer(prefs.theme);
-    } else if (localStorage.getItem('haven_theme')) {
-      // Preserve the user's locally chosen theme/effect combo if no saved server-side preference exists yet.
+      localStorage.setItem('haven_user_theme_override', '1');
+    } else if (localStorage.getItem('haven_user_theme_override') === '1' && localStorage.getItem('haven_theme')) {
       applyThemeFromServer(localStorage.getItem('haven_theme'));
+    } else if ((this.servers || []).find(s => s.id === this.currentServerId)?.theme) {
+      applyThemeFromServer((this.servers || []).find(s => s.id === this.currentServerId)?.theme);
     } else if (this.serverSettings.default_theme) {
       // No personal preference — apply the server's default theme
       applyThemeFromServer(this.serverSettings.default_theme);
