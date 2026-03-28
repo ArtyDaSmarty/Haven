@@ -152,8 +152,6 @@ function initDatabase() {
       ON messages(channel_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_channel_code
       ON channels(code);
-    CREATE INDEX IF NOT EXISTS idx_channels_server_id
-      ON channels(server_id);
     CREATE INDEX IF NOT EXISTS idx_reactions_message
       ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_bans_user
@@ -189,6 +187,7 @@ function initDatabase() {
   } catch {
     db.exec("ALTER TABLE channels ADD COLUMN server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE");
   }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channels_server_id ON channels(server_id)");
   try {
     db.prepare("SELECT legacy_name FROM servers LIMIT 0").get();
   } catch {
