@@ -1098,6 +1098,9 @@ _setupSocketListeners() {
     if (prefs.theme) {
       // User has a saved personal theme preference — apply it
       applyThemeFromServer(prefs.theme);
+    } else if (localStorage.getItem('haven_theme')) {
+      // Preserve the user's locally chosen theme/effect combo if no saved server-side preference exists yet.
+      applyThemeFromServer(localStorage.getItem('haven_theme'));
     } else if (this.serverSettings.default_theme) {
       // No personal preference — apply the server's default theme
       applyThemeFromServer(this.serverSettings.default_theme);
