@@ -126,6 +126,7 @@ function initDatabase() {
       code TEXT UNIQUE NOT NULL,
       icon_url TEXT DEFAULT '',
       theme TEXT DEFAULT '',
+      theme_force_override INTEGER NOT NULL DEFAULT 0,
       legacy_name TEXT DEFAULT NULL,
       is_legacy_main INTEGER NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES users(id),
@@ -203,6 +204,11 @@ function initDatabase() {
     db.prepare("SELECT theme FROM servers LIMIT 0").get();
   } catch {
     db.exec("ALTER TABLE servers ADD COLUMN theme TEXT DEFAULT ''");
+  }
+  try {
+    db.prepare("SELECT theme_force_override FROM servers LIMIT 0").get();
+  } catch {
+    db.exec("ALTER TABLE servers ADD COLUMN theme_force_override INTEGER NOT NULL DEFAULT 0");
   }
 
   // ── Migration: high_scores table ────────────────────────
