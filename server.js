@@ -650,9 +650,85 @@ function buildStorageStatusPayload() {
   };
 }
 
+function getFileSizeSafe(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function extractUploadNames(content) {
+  if (typeof content !== 'string' || !content) return [];
+  const names = new Set();
+  const matches = content.matchAll(/\/uploads\/([\w.-]+)/g);
+  for (const match of matches) {
+    if (match[1]) names.add(match[1]);
+  }
+  return [...names];
+}
+
+function collectDataUsageSnapshot() {
+  const db = getDb();
+  const messagesBytes = db.prepare('SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM messages').get()?.total || 0;
+
+  const attachmentRows = db.prepare(`
+    SELECT id, content, created_at
+    FROM messages
+    WHERE content LIKE '%/uploads/%'
+    ORDER BY datetime(created_at) ASC, id ASC
+  `).all();
+  const attachmentItems = attachmentRows.flatMap(row => extractUploadNames(row.content).map(name => ({
+    messageId: row.id,
+    name,
+    created_at: row.created_at,
+    size: getFileSizeSafe(path.join(UPLOADS_DIR, name))
+  })));
+
+  const querySafe = (sql) => {
+    try { return db.prepare(sql).all(); } catch { return []; }
+  };
+  const valueSafe = (sql) => {
+    try { return db.prepare(sql).get(); } catch { return null; }
+  };
+
+  const emojis = querySafe('SELECT id, filename, created_at FROM custom_emojis ORDER BY datetime(created_at) ASC, id ASC');
+  const sounds = querySafe('SELECT id, filename, created_at FROM custom_sounds ORDER BY datetime(created_at) ASC, id ASC');
+  const proxyAvatars = querySafe("SELECT id, avatar_url FROM proxies WHERE avatar_url IS NOT NULL AND avatar_url != ''");
+  const userAvatars = querySafe("SELECT id, avatar FROM users WHERE avatar IS NOT NULL AND avatar != ''");
+  const serverIcons = [
+    ...(valueSafe("SELECT value FROM server_settings WHERE key = 'server_icon'")?.value ? [{ path: valueSafe("SELECT value FROM server_settings WHERE key = 'server_icon'").value }] : []),
+    ...querySafe("SELECT icon_url AS path FROM servers WHERE icon_url IS NOT NULL AND icon_url != ''")
+  ];
+
+  const uploadBytes = (rows, field) => rows.reduce((sum, row) => {
+    const raw = row[field] || row.path;
+    const name = typeof raw === 'string' ? path.basename(raw) : '';
+    return sum + (name ? getFileSizeSafe(path.join(UPLOADS_DIR, name)) : 0);
+  }, 0);
+
+  return {
+    storageProvider: getStorageConfig().provider,
+    categories: [
+      { key: 'messages', label: 'Chats', bytes: messagesBytes, count: valueSafe('SELECT COUNT(*) AS cnt FROM messages')?.cnt || 0 },
+      { key: 'attachments', label: 'Attachments', bytes: attachmentItems.reduce((sum, row) => sum + row.size, 0), count: attachmentItems.length },
+      { key: 'emojis', label: 'Emojis', bytes: uploadBytes(emojis, 'filename'), count: emojis.length },
+      { key: 'sounds', label: 'Sounds', bytes: uploadBytes(sounds, 'filename'), count: sounds.length },
+      { key: 'proxy_avatars', label: 'Proxy Avatars', bytes: uploadBytes(proxyAvatars, 'avatar_url'), count: proxyAvatars.length, protected: true },
+      { key: 'user_avatars', label: 'User Avatars', bytes: uploadBytes(userAvatars, 'avatar'), count: userAvatars.length, protected: true },
+      { key: 'server_icons', label: 'Server / Instance Icons', bytes: uploadBytes(serverIcons, 'path'), count: serverIcons.length, protected: true }
+    ]
+  };
+}
+
 app.get('/api/admin/storage/status', (req, res) => {
   if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
   res.json(buildStorageStatusPayload());
+});
+
+app.get('/api/admin/data-monitoring', (req, res) => {
+  if (!getAdminFromRequest(req)) return res.status(403).json({ error: 'Admin only' });
+  res.json(collectDataUsageSnapshot());
 });
 
 app.post('/api/admin/storage/configure', express.json(), async (req, res) => {
@@ -2544,6 +2620,10 @@ async function runAutoCleanup() {
 
     const maxAgeDays = parseInt(getSetting('cleanup_max_age_days') || '0');
     const maxSizeMb = parseInt(getSetting('cleanup_max_size_mb') || '0');
+    const maxMessagesMb = parseInt(getSetting('cleanup_messages_mb') || '0');
+    const maxAttachmentsMb = parseInt(getSetting('cleanup_attachments_mb') || '0');
+    const maxEmojisMb = parseInt(getSetting('cleanup_emojis_mb') || '0');
+    const maxSoundsMb = parseInt(getSetting('cleanup_sounds_mb') || '0');
     let totalDeleted = 0;
 
     // 1. Delete messages older than N days (skip archived/protected messages and exempt channels)
@@ -2585,6 +2665,80 @@ async function runAutoCleanup() {
           totalDeleted += oldestIds.length;
         }
       }
+    }
+
+    if (maxMessagesMb > 0) {
+      const limitBytes = maxMessagesMb * 1024 * 1024;
+      let currentBytes = db.prepare('SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM messages WHERE is_archived = 0 AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)').get()?.total || 0;
+      if (currentBytes > limitBytes) {
+        const rows = db.prepare(`
+          SELECT id, LENGTH(content) AS bytes
+          FROM messages
+          WHERE is_archived = 0 AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)
+          ORDER BY datetime(created_at) ASC, id ASC
+        `).all();
+        for (const row of rows) {
+          if (currentBytes <= limitBytes) break;
+          db.prepare('DELETE FROM reactions WHERE message_id = ?').run(row.id);
+          db.prepare('DELETE FROM messages WHERE id = ?').run(row.id);
+          currentBytes -= row.bytes || 0;
+          totalDeleted++;
+        }
+      }
+    }
+
+    if (maxAttachmentsMb > 0) {
+      const limitBytes = maxAttachmentsMb * 1024 * 1024;
+      const attachmentRows = db.prepare(`
+        SELECT id, content, created_at
+        FROM messages
+        WHERE is_archived = 0
+          AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)
+          AND content LIKE '%/uploads/%'
+        ORDER BY datetime(created_at) ASC, id ASC
+      `).all();
+      let currentBytes = attachmentRows.reduce((sum, row) => sum + extractUploadNames(row.content).reduce((inner, name) => inner + getFileSizeSafe(path.join(UPLOADS_DIR, name)), 0), 0);
+      for (const row of attachmentRows) {
+        if (currentBytes <= limitBytes) break;
+        const uploadNames = extractUploadNames(row.content);
+        for (const name of uploadNames) {
+          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
+          await deleteUploadByName(name).catch(() => {});
+        }
+        db.prepare('DELETE FROM reactions WHERE message_id = ?').run(row.id);
+        db.prepare('DELETE FROM messages WHERE id = ?').run(row.id);
+        totalDeleted++;
+      }
+    }
+
+    if (maxEmojisMb > 0) {
+      const limitBytes = maxEmojisMb * 1024 * 1024;
+      try {
+        const rows = db.prepare('SELECT id, filename FROM custom_emojis ORDER BY datetime(created_at) ASC, id ASC').all();
+        let currentBytes = rows.reduce((sum, row) => sum + getFileSizeSafe(path.join(UPLOADS_DIR, path.basename(row.filename))), 0);
+        for (const row of rows) {
+          if (currentBytes <= limitBytes) break;
+          const name = path.basename(row.filename);
+          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
+          await deleteUploadByName(name).catch(() => {});
+          db.prepare('DELETE FROM custom_emojis WHERE id = ?').run(row.id);
+        }
+      } catch {}
+    }
+
+    if (maxSoundsMb > 0) {
+      const limitBytes = maxSoundsMb * 1024 * 1024;
+      try {
+        const rows = db.prepare('SELECT id, filename FROM custom_sounds ORDER BY datetime(created_at) ASC, id ASC').all();
+        let currentBytes = rows.reduce((sum, row) => sum + getFileSizeSafe(path.join(UPLOADS_DIR, path.basename(row.filename))), 0);
+        for (const row of rows) {
+          if (currentBytes <= limitBytes) break;
+          const name = path.basename(row.filename);
+          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
+          await deleteUploadByName(name).catch(() => {});
+          db.prepare('DELETE FROM custom_sounds WHERE id = ?').run(row.id);
+        }
+      } catch {}
     }
 
     // Also clean up old uploaded files if age cleanup is set
