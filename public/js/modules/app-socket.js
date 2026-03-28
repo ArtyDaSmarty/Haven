@@ -56,9 +56,9 @@ _setupSocketListeners() {
       this._initE2E();
     }
     // Show server version in status bar
-    if (data.version) {
+    {
       const vEl = document.getElementById('status-version');
-      if (vEl) vEl.textContent = 'v' + data.version;
+      if (vEl) vEl.textContent = 'v2.0';
     }
     // Refresh display name + admin UI with authoritative data
     document.getElementById('current-user').textContent = this.user.displayName || this.user.username;
@@ -73,7 +73,7 @@ _setupSocketListeners() {
     if (this.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
-      document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard')) ? 'block' : 'none';
+      document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     }
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
   });
@@ -88,7 +88,7 @@ _setupSocketListeners() {
     const canModerate = this.user.isAdmin || this.user.effectiveLevel >= 25;
     const canCreateChannel = this.user.isAdmin || this._hasPerm('create_channel');
     document.getElementById('admin-controls').style.display = canCreateChannel ? 'block' : 'none';
-    document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard')) ? 'block' : 'none';
+    document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     this._showToast('Your roles have been updated', 'info');
   });
@@ -855,7 +855,7 @@ _setupSocketListeners() {
     if (data.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
-      document.getElementById('admin-mod-panel').style.display = 'none';
+      document.getElementById('admin-mod-panel').style.display = (this._canModerate() || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     }
   });
 
