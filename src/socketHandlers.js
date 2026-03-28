@@ -203,7 +203,7 @@ const VALID_ROLE_PERMS = [
   'create_channel', 'create_forum_posts', 'upload_files', 'use_voice', 'use_tts',
   'manage_webhooks', 'mention_everyone', 'view_history', 'view_all_members',
   'manage_emojis', 'manage_soundboard', 'manage_music_queue',
-  'promote_user', 'transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'
+  'promote_user', 'transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'
 ];
 
 function setupSocketHandlers(io, db) {
@@ -465,6 +465,59 @@ function setupSocketHandlers(io, db) {
       }
     }
     return role || null;
+  }
+
+  function generateServerCode() {
+    let code;
+    do {
+      code = crypto.randomBytes(4).toString('hex');
+    } while (db.prepare('SELECT 1 FROM servers WHERE code = ?').get(code));
+    return code;
+  }
+
+  function getMainServer() {
+    return db.prepare("SELECT * FROM servers WHERE name = 'Main' ORDER BY id LIMIT 1").get();
+  }
+
+  function getVisibleServers(userId, isAdmin) {
+    if (isAdmin) {
+      return db.prepare(`
+        SELECT s.id, s.name, s.code, s.icon_url, s.created_by, s.created_at, s.position,
+               (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
+        FROM servers s
+        ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
+      `).all();
+    }
+
+    return db.prepare(`
+      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.created_by, s.created_at, s.position,
+             (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
+      FROM servers s
+      JOIN channels c ON c.server_id = s.id AND c.is_dm = 0
+      JOIN channel_members cm ON cm.channel_id = c.id
+      WHERE cm.user_id = ?
+      ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
+    `).all(userId);
+  }
+
+  function getServerByIdForUser(serverId, userId, isAdmin) {
+    if (!serverId) return null;
+    const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+    if (!server) return null;
+    if (isAdmin) return server;
+    const visible = db.prepare(`
+      SELECT 1
+      FROM channels c
+      JOIN channel_members cm ON cm.channel_id = c.id
+      WHERE c.server_id = ? AND c.is_dm = 0 AND cm.user_id = ?
+      LIMIT 1
+    `).get(serverId, userId);
+    return visible ? server : null;
+  }
+
+  function emitServersList(targetSocket) {
+    if (!targetSocket?.user) return;
+    targetSocket.emit('servers-list', getVisibleServers(targetSocket.user.id, targetSocket.user.isAdmin));
   }
 
   // ── Socket connection rate limiting (per IP) ────────────
@@ -801,6 +854,8 @@ function setupSocketHandlers(io, db) {
       }
     }
 
+    emitServersList(socket);
+
     // ── Per-socket flood protection ─────────────────────────
     const floodBuckets = { message: [], event: [] };
     const FLOOD_LIMITS = {
@@ -848,7 +903,7 @@ function setupSocketHandlers(io, db) {
       if (isAdmin) {
         // Admins see ALL non-DM channels plus their own DMs
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -856,7 +911,7 @@ function setupSocketHandlers(io, db) {
           FROM channels c
           WHERE c.is_dm = 0
           UNION
-          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -873,7 +928,7 @@ function setupSocketHandlers(io, db) {
         });
       } else {
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -958,6 +1013,7 @@ function setupSocketHandlers(io, db) {
         for (const [, s] of io.sockets.sockets) {
           if (s.user) {
             s.emit('channels-list', getEnrichedChannels(s.user.id, s.user.isAdmin, null));
+            emitServersList(s);
           }
         }
       }, 150); // 150ms debounce — batches rapid channel mutations
@@ -989,6 +1045,92 @@ function setupSocketHandlers(io, db) {
       socket.emit('channels-list', channels);
     });
 
+    socket.on('get-servers', () => {
+      emitServersList(socket);
+    });
+
+    socket.on('create-server', (data, callback) => {
+      const cb = typeof callback === 'function' ? callback : () => {};
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_server')) {
+        return cb({ error: 'You do not have permission to create servers' });
+      }
+      if (!data || typeof data !== 'object') return cb({ error: 'Invalid request' });
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
+
+      try {
+        const result = db.prepare(
+          'INSERT INTO servers (name, code, icon_url, created_by, position) VALUES (?, ?, ?, ?, ?)'
+        ).run(
+          name,
+          generateServerCode(),
+          String(data.iconUrl || '').trim(),
+          socket.user.id,
+          Number(db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS nextPos FROM servers').get()?.nextPos || 1)
+        );
+
+        const serverId = result.lastInsertRowid;
+        const generalCode = generateChannelCode();
+        const channelResult = db.prepare(
+          'INSERT INTO channels (name, code, server_id, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, 0, NULL, ?, 1, 1, 1)'
+        ).run('general', generalCode, serverId, socket.user.id, 'standard');
+        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(channelResult.lastInsertRowid, socket.user.id);
+
+        broadcastChannelLists();
+        cb({ ok: true, serverId, defaultChannelCode: generalCode });
+      } catch (err) {
+        console.error('Create server error:', err);
+        cb({ error: 'Failed to create server' });
+      }
+    });
+
+    socket.on('update-subserver', (data, callback) => {
+      const cb = typeof callback === 'function' ? callback : () => {};
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
+        return cb({ error: 'You do not have permission to edit servers' });
+      }
+      if (!data || typeof data !== 'object') return cb({ error: 'Invalid request' });
+      const serverId = Number(data.serverId);
+      if (!serverId) return cb({ error: 'Invalid server' });
+      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+      if (!server) return cb({ error: 'Server not found' });
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      const iconUrl = typeof data.iconUrl === 'string' ? data.iconUrl.trim() : '';
+      if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
+
+      try {
+        db.prepare('UPDATE servers SET name = ?, icon_url = ? WHERE id = ?').run(name, iconUrl, serverId);
+        emitServersList(socket);
+        broadcastChannelLists();
+        cb({ ok: true });
+      } catch (err) {
+        console.error('Update subserver error:', err);
+        cb({ error: 'Failed to update server' });
+      }
+    });
+
+    socket.on('delete-server', (data, callback) => {
+      const cb = typeof callback === 'function' ? callback : () => {};
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_server')) {
+        return cb({ error: 'You do not have permission to delete servers' });
+      }
+      const serverId = Number(data?.serverId);
+      if (!serverId) return cb({ error: 'Invalid server' });
+      const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+      if (!server) return cb({ error: 'Server not found' });
+      if (server.name === 'Main') return cb({ error: 'Main cannot be deleted' });
+
+      try {
+        db.prepare('DELETE FROM channels WHERE server_id = ?').run(serverId);
+        db.prepare('DELETE FROM servers WHERE id = ?').run(serverId);
+        broadcastChannelLists();
+        cb({ ok: true });
+      } catch (err) {
+        console.error('Delete server error:', err);
+        cb({ error: 'Failed to delete server' });
+      }
+    });
+
     // ── Create channel (permission-based) ─────────────────
     socket.on('create-channel', (data) => {
       if (!data || typeof data !== 'object') return;
@@ -1011,6 +1153,13 @@ function setupSocketHandlers(io, db) {
       const code = generateChannelCode();
       const channelType = data.channelType === 'forum' ? 'forum' : 'standard';
       const isPrivate = data.isPrivate ? 1 : 0;
+      const requestedServerId = Number(data.serverId);
+      const targetServer = getServerByIdForUser(requestedServerId, socket.user.id, socket.user.isAdmin)
+        || getVisibleServers(socket.user.id, socket.user.isAdmin)[0]
+        || getMainServer();
+      if (!targetServer?.id) {
+        return socket.emit('error-msg', 'No server available for this channel');
+      }
 
       // Optional temporary channel: duration in hours (1–720 = 30 days max)
       let expiresAt = null;
@@ -1023,10 +1172,11 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO channels (name, code, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          'INSERT INTO channels (name, code, server_id, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         ).run(
           name.trim(),
           code,
+          targetServer.id,
           socket.user.id,
           isPrivate,
           expiresAt,
@@ -1059,6 +1209,7 @@ function setupSocketHandlers(io, db) {
           id: result.lastInsertRowid,
           name: name.trim(),
           code,
+          server_id: targetServer.id,
           display_code: code, // Creator always sees the real code
           created_by: socket.user.id,
           topic: '',
@@ -1087,19 +1238,23 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Invalid channel code format');
       }
 
-      // ── Check if this is a server-wide invite code ─────
-      const serverCodeRow = db.prepare("SELECT value FROM server_settings WHERE key = 'server_code'").get();
-      if (serverCodeRow && serverCodeRow.value && serverCodeRow.value === code) {
-        // Server code: add user to ALL top-level non-DM channels and their non-private sub-channels
-        const allParents = db.prepare('SELECT id, code FROM channels WHERE parent_channel_id IS NULL AND is_dm = 0').all();
+      // ── Check if this is a sub-server invite code ─────
+      const serverInvite = db.prepare('SELECT * FROM servers WHERE code = ?').get(code);
+      if (serverInvite) {
+        // Server code: add user to all top-level non-private channels in that server
+        const allParents = db.prepare(
+          'SELECT id, code FROM channels WHERE server_id = ? AND parent_channel_id IS NULL AND is_dm = 0 AND is_private = 0'
+        ).all(serverInvite.id);
         const insertMember = db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)');
         let joinedCount = 0;
+        let firstCode = null;
 
         const txn = db.transaction(() => {
           for (const parent of allParents) {
             insertMember.run(parent.id, socket.user.id);
             socket.join(`channel:${parent.code}`);
             joinedCount++;
+            if (!firstCode) firstCode = parent.code;
             // Also add to non-private sub-channels
             const subs = db.prepare('SELECT id, code FROM channels WHERE parent_channel_id = ? AND is_private = 0').all(parent.id);
             for (const sub of subs) {
@@ -1111,9 +1266,10 @@ function setupSocketHandlers(io, db) {
         });
         txn();
 
-        // Refresh their channel list
+        emitServersList(socket);
         socket.emit('channels-list', getEnrichedChannels(socket.user.id, socket.user.isAdmin, (room) => socket.join(room)));
-        socket.emit('error-msg', `Server code accepted — joined ${joinedCount} channel${joinedCount !== 1 ? 's' : ''}`);
+        socket.emit('server-joined', { serverId: serverInvite.id, firstChannelCode: firstCode });
+        socket.emit('error-msg', `${serverInvite.name} joined — added ${joinedCount} channel${joinedCount !== 1 ? 's' : ''}`);
         return;
       }
 
@@ -3956,23 +4112,29 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ SERVER-WIDE INVITE CODE ════════════════
 
-    socket.on('generate-server-code', () => {
+    socket.on('generate-server-code', (data = {}) => {
       if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
         return socket.emit('error-msg', 'Only admins can manage server codes');
       }
-      const code = generateChannelCode();
-      db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', code);
-      io.emit('server-setting-changed', { key: 'server_code', value: code });
-      socket.emit('error-msg', `Server invite code generated: ${code}`);
+      const serverId = Number(data.serverId);
+      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+      if (!server) return socket.emit('error-msg', 'Server not found');
+      const code = generateServerCode();
+      db.prepare('UPDATE servers SET code = ? WHERE id = ?').run(code, server.id);
+      for (const [, s] of io.sockets.sockets) emitServersList(s);
+      socket.emit('error-msg', `${server.name} invite code generated: ${code}`);
     });
 
-    socket.on('clear-server-code', () => {
+    socket.on('clear-server-code', (data = {}) => {
       if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
         return socket.emit('error-msg', 'Only admins can manage server codes');
       }
-      db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', '');
-      io.emit('server-setting-changed', { key: 'server_code', value: '' });
-      socket.emit('error-msg', 'Server invite code cleared');
+      const serverId = Number(data.serverId);
+      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+      if (!server) return socket.emit('error-msg', 'Server not found');
+      db.prepare('UPDATE servers SET code = ? WHERE id = ?').run('', server.id);
+      for (const [, s] of io.sockets.sockets) emitServersList(s);
+      socket.emit('error-msg', `${server.name} invite code cleared`);
     });
 
     // ═══════════════ ADMIN: RUN CLEANUP NOW ═════════════════
@@ -5469,7 +5631,7 @@ function setupSocketHandlers(io, db) {
         const perms = Array.isArray(data.permissions) ? data.permissions : [];
         const validPerms = VALID_ROLE_PERMS;
         // Escalation guard: non-admins cannot grant permissions they don't have
-        const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'];
+        const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'];
         const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
         perms.forEach(p => {
           if (!validPerms.includes(p)) return;
@@ -5526,7 +5688,7 @@ function setupSocketHandlers(io, db) {
         if (Array.isArray(data.permissions)) {
           const validPerms = [...VALID_ROLE_PERMS];
           // Escalation guard: non-admins cannot grant permissions they don't have
-          const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'];
+          const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'];
           db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(roleId);
           const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
           data.permissions.forEach(p => {
