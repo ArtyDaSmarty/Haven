@@ -894,8 +894,11 @@ _startPingMonitor() {
   if (this._memberRefreshInterval) clearInterval(this._memberRefreshInterval);
   this._memberRefreshInterval = setInterval(() => {
     if (this.socket && this.socket.connected && this.currentChannel) {
-      this.socket.emit('request-online-users', { code: this.currentChannel });
-      this.socket.emit('request-voice-users', { code: this.currentChannel });
+      const channel = this.channels?.find(c => c.code === this.currentChannel);
+      if (channel?.special_section !== 'announcements') {
+        this.socket.emit('request-online-users', { code: this.currentChannel });
+        this.socket.emit('request-voice-users', { code: this.currentChannel });
+      }
     }
   }, 30000);
 
