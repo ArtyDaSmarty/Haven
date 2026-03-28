@@ -7,4 +7,4 @@ Currently, this repository is used to fit the needs of, "Sanctuary"- A Haven ins
 
 - Proxy/Persona System Built-In With Some QOL
 - Forum Channels
-- S3 Volume Option For Uploads/Attachments (Use The S3 Branch)
+- S3 Volume Option For Uploads/Attachments
