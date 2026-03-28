@@ -646,6 +646,7 @@ function initDatabase() {
     { name: 'category',           sql: "ALTER TABLE channels ADD COLUMN category TEXT DEFAULT NULL" },
     { name: 'sort_alphabetical',  sql: "ALTER TABLE channels ADD COLUMN sort_alphabetical INTEGER DEFAULT 0" },
     { name: 'cleanup_exempt',     sql: "ALTER TABLE channels ADD COLUMN cleanup_exempt INTEGER DEFAULT 0" },
+    { name: 'special_section',    sql: "ALTER TABLE channels ADD COLUMN special_section TEXT DEFAULT NULL" },
     { name: 'channel_type',       sql: "ALTER TABLE channels ADD COLUMN channel_type TEXT DEFAULT 'standard'" },
     { name: 'voice_user_limit',   sql: "ALTER TABLE channels ADD COLUMN voice_user_limit INTEGER DEFAULT 0" },
     { name: 'media_enabled',      sql: "ALTER TABLE channels ADD COLUMN media_enabled INTEGER DEFAULT 1" },
@@ -711,6 +712,37 @@ function initDatabase() {
 
   // ── Migration: ensure default User role can create forum posts ──
   try {
+    function generateChannelCode() {
+      let code;
+      do {
+        code = Math.random().toString(16).slice(2, 10).padEnd(8, '0').slice(0, 8);
+      } while (db.prepare('SELECT 1 FROM channels WHERE code = ?').get(code));
+      return code;
+    }
+
+    const announcementsChannel = db.prepare("SELECT id FROM channels WHERE special_section = 'announcements' LIMIT 1").get();
+    const announcementsChannelId = announcementsChannel?.id || (() => {
+      const result = db.prepare(`
+        INSERT INTO channels (
+          name, code, server_id, created_by, special_section, notification_type,
+          channel_type, text_enabled, media_enabled, voice_enabled, position
+        ) VALUES (?, ?, ?, NULL, 'announcements', 'announcement', 'standard', 1, 1, 0, -100)
+      `).run('Admin Announcements', generateChannelCode(), mainServerId);
+      return result.lastInsertRowid;
+    })();
+
+    db.prepare(`
+      UPDATE channels
+      SET name = ?, server_id = ?, special_section = 'announcements', notification_type = 'announcement',
+          text_enabled = 1, media_enabled = 1, voice_enabled = 0
+      WHERE id = ?
+    `).run('Admin Announcements', mainServerId, announcementsChannelId);
+
+    db.prepare(`
+      INSERT OR IGNORE INTO channel_members (channel_id, user_id)
+      SELECT ?, id FROM users
+    `).run(announcementsChannelId);
+
     const userRole = db.prepare("SELECT id FROM roles WHERE name = 'User' AND level = 1 AND scope = 'server'").get();
     if (userRole) {
       db.prepare("INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, 'create_forum_posts', 1)").run(userRole.id);
