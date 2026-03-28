@@ -21,6 +21,7 @@
       <!-- ─── Server Bar (far left — sub-servers in this Haven instance) ─────── -->
       <nav class="server-bar" id="server-bar">
         <div class="server-icon dm-bubble" id="dm-server-bubble" title="Direct Messages">
+          <span class="dm-unread-count" id="dm-server-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;line-height:18px;font-size:0.72rem;padding:0 5px;border-radius:999px;background:#ff5d73;color:#fff;text-align:center;"></span>
           <span class="server-icon-text">💬</span>
         </div>
         <div class="server-separator"></div>
@@ -133,7 +134,7 @@
           </div>
           <div class="sidebar-split-handle" id="sidebar-split-handle" title="Drag to resize"></div>
           <div class="sidebar-section dm-section-pane" id="dm-pane">
-            <h5 class="section-label dm-section-label dm-toggle" id="dm-toggle-header" style="cursor:pointer;user-select:none"><span class="dm-toggle-arrow" id="dm-toggle-arrow">▾</span><span class="section-label-text" style="flex:1">Direct Messages</span><span style="display:flex;align-items:center;gap:4px;position:relative;z-index:2"><span class="dm-unread-count" id="dm-unread-badge" style="display:none"></span><button class="icon-btn small" id="organize-dms-btn" title="Organize DMs" style="font-size:0.85rem;padding:2px 6px;opacity:0.6">📋</button></span></h5>
+            <h5 class="section-label dm-section-label dm-toggle" id="dm-toggle-header" style="cursor:pointer;user-select:none"><span class="dm-toggle-arrow" id="dm-toggle-arrow">▾</span><span class="section-label-text" style="flex:1">Direct Messages</span><span style="display:flex;align-items:center;gap:4px;position:relative;z-index:2"><span class="dm-unread-count" id="dm-section-badge" style="display:none"></span><button class="icon-btn small" id="organize-dms-btn" title="Organize DMs" style="font-size:0.85rem;padding:2px 6px;opacity:0.6">📋</button></span></h5>
             <div class="dm-list-scroll" id="dm-list"></div>
           </div>
         </div>
@@ -1024,7 +1025,7 @@
           <div class="settings-nav-item settings-nav-admin" data-target="section-invite" style="display:none">🌐 Invite Code</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-cleanup" style="display:none">🗑️ Cleanup</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-uploads" style="display:none">📁 Limits</div>
-          <div class="settings-nav-item settings-nav-admin" data-target="section-storage" style="display:none">☁️ Storage</div>
+          <div class="settings-nav-item settings-nav-admin" data-target="section-storage" style="display:none">☁️ Upload Storage</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-sounds-admin" style="display:none">🔊 Sounds</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-emojis" style="display:none">😎 Emojis</div>
           <div class="settings-nav-item settings-nav-admin" data-target="section-roles" style="display:none">👑 Roles</div>
@@ -1622,8 +1623,8 @@
           <button class="btn-sm btn-full" id="run-cleanup-now-btn" style="margin-top:4px;">🧹 Run Cleanup Now</button>
         </div>
         <div class="admin-settings" id="section-session" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
-          <h5 class="settings-section-subtitle">🔐 Session</h5>
-          <small class="settings-hint">Log out before switching to another Haven instance.</small>
+          <h5 class="settings-section-subtitle">💀 Logout</h5>
+          <small class="settings-hint">Log out before switching to another instance.</small>
           <button class="btn-sm btn-full" id="settings-logout-btn" style="margin-top:8px">Logout</button>
         </div>
         <div class="admin-settings" id="section-uploads" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
@@ -1655,7 +1656,7 @@
           <small class="settings-hint">Maximum proxy avatar upload size (32-2048 KB, default 256)</small>
         </div>
         <div class="admin-settings" id="section-storage" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
-          <h5 class="settings-section-subtitle">☁️ Storage</h5>
+          <h5 class="settings-section-subtitle">☁️ Upload Storage</h5>
           <div id="storage-configured-panel" style="display:none;margin:8px 0 10px 0;padding:10px;border:1px solid var(--border);border-radius:10px;background:rgba(91,196,140,0.08);">
             <div id="storage-configured-title" style="font-weight:700;">S3 storage is configured.</div>
             <small class="settings-hint" id="storage-configured-summary" style="display:block;margin-top:4px;"></small>
