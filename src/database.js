@@ -125,6 +125,8 @@ function initDatabase() {
       name TEXT NOT NULL,
       code TEXT UNIQUE NOT NULL,
       icon_url TEXT DEFAULT '',
+      legacy_name TEXT DEFAULT NULL,
+      is_legacy_main INTEGER NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       position INTEGER DEFAULT 0
@@ -187,6 +189,16 @@ function initDatabase() {
   } catch {
     db.exec("ALTER TABLE channels ADD COLUMN server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE");
   }
+  try {
+    db.prepare("SELECT legacy_name FROM servers LIMIT 0").get();
+  } catch {
+    db.exec("ALTER TABLE servers ADD COLUMN legacy_name TEXT DEFAULT NULL");
+  }
+  try {
+    db.prepare("SELECT is_legacy_main FROM servers LIMIT 0").get();
+  } catch {
+    db.exec("ALTER TABLE servers ADD COLUMN is_legacy_main INTEGER NOT NULL DEFAULT 0");
+  }
 
   // ── Migration: high_scores table ────────────────────────
   db.exec(`
@@ -228,7 +240,6 @@ function initDatabase() {
   insertSetting.run('max_emoji_kb', '256');               // max emoji file size in KB (64–1024)
   insertSetting.run('max_proxy_avatar_kb', '256');
   insertSetting.run('setup_wizard_complete', 'false');   // first-time admin setup wizard
-  insertSetting.run('update_banner_admin_only', 'false'); // hide update banner from non-admins
 
   function generateServerCode() {
     let code;
@@ -241,10 +252,12 @@ function initDatabase() {
   const mainServer = db.prepare("SELECT id FROM servers WHERE name = 'Main' ORDER BY id LIMIT 1").get();
   const mainServerId = mainServer?.id || (() => {
     const result = db.prepare(
-      'INSERT INTO servers (name, code, icon_url, created_by, position) VALUES (?, ?, ?, NULL, 0)'
-    ).run('Main', generateServerCode(), '');
+      'INSERT INTO servers (name, code, icon_url, legacy_name, is_legacy_main, created_by, position) VALUES (?, ?, ?, ?, 1, NULL, 0)'
+    ).run('Main', generateServerCode(), '', 'Main');
     return result.lastInsertRowid;
   })();
+
+  db.prepare('UPDATE servers SET legacy_name = ?, is_legacy_main = 1 WHERE id = ?').run('Main', mainServerId);
 
   db.prepare('UPDATE channels SET server_id = ? WHERE is_dm = 0 AND server_id IS NULL').run(mainServerId);
 
@@ -428,6 +441,7 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE,
       channel_id INTEGER DEFAULT NULL REFERENCES channels(id) ON DELETE CASCADE,
       granted_by INTEGER REFERENCES users(id),
       granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -442,8 +456,14 @@ function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_roles_server ON user_roles(server_id);
     CREATE INDEX IF NOT EXISTS idx_user_roles_channel ON user_roles(channel_id);
   `);
+  try {
+    db.prepare('SELECT server_id FROM user_roles LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE user_roles ADD COLUMN server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE');
+  }
 
   // Seed default roles if none exist
   const roleCount = db.prepare('SELECT COUNT(*) as cnt FROM roles').get();
@@ -496,10 +516,10 @@ function initDatabase() {
   const autoRoles = db.prepare('SELECT id FROM roles WHERE auto_assign = 1 AND scope = ?').all('server');
   for (const ar of autoRoles) {
     db.prepare(`
-      INSERT OR IGNORE INTO user_roles (user_id, role_id, channel_id, granted_by)
-      SELECT u.id, ?, NULL, NULL FROM users u
-      WHERE u.id NOT IN (SELECT DISTINCT user_id FROM user_roles WHERE channel_id IS NULL)
-    `).run(ar.id);
+      INSERT OR IGNORE INTO user_roles (user_id, role_id, server_id, channel_id, granted_by)
+      SELECT u.id, ?, ?, NULL, NULL FROM users u
+      WHERE u.id NOT IN (SELECT DISTINCT user_id FROM user_roles WHERE channel_id IS NULL AND server_id = ?)
+    `).run(ar.id, mainServerId, mainServerId);
   }
 
   // ── Cleanup: remove duplicate user_roles (NULL channel_id duplicates) ──
@@ -507,9 +527,17 @@ function initDatabase() {
   db.exec(`
     DELETE FROM user_roles WHERE id NOT IN (
       SELECT MIN(id) FROM user_roles
-      GROUP BY user_id, role_id, COALESCE(channel_id, -1)
+      GROUP BY user_id, role_id, COALESCE(server_id, -1), COALESCE(channel_id, -1)
     )
   `);
+
+  db.prepare(`
+    UPDATE user_roles
+    SET server_id = ?
+    WHERE channel_id IS NULL
+      AND server_id IS NULL
+      AND user_id IN (SELECT id FROM users WHERE is_admin = 0)
+  `).run(mainServerId);
 
   // ── Migration: custom_level column on user_roles for per-assignment level overrides ──
   try {
@@ -524,14 +552,27 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE,
       channel_id INTEGER DEFAULT NULL REFERENCES channels(id) ON DELETE CASCADE,
       permission TEXT NOT NULL,
       allowed INTEGER NOT NULL DEFAULT 1
     )
   `);
   try {
+    db.prepare('SELECT server_id FROM user_role_perms LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE user_role_perms ADD COLUMN server_id INTEGER DEFAULT NULL REFERENCES servers(id) ON DELETE CASCADE');
+  }
+  try {
     db.prepare('SELECT 1 FROM user_role_perms LIMIT 0').get();
   } catch { /* table just created */ }
+  db.prepare(`
+    UPDATE user_role_perms
+    SET server_id = ?
+    WHERE channel_id IS NULL
+      AND server_id IS NULL
+      AND user_id IN (SELECT id FROM users WHERE is_admin = 0)
+  `).run(mainServerId);
 
   // ── Migration: push notification subscriptions ──────────
   db.exec(`
