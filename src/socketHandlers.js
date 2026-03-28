@@ -242,7 +242,7 @@ function setupSocketHandlers(io, db) {
     const instanceRole = db.prepare(`
       SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
       JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = ? AND r.scope = 'server' AND ur.channel_id IS NULL AND ur.server_id IS NULL
+      WHERE ur.user_id = ? AND r.scope = 'server' AND r.is_cosmetic = 0 AND ur.channel_id IS NULL AND ur.server_id IS NULL
     `).get(userId);
     let level = (instanceRole && instanceRole.maxLevel) || 0;
 
@@ -251,7 +251,7 @@ function setupSocketHandlers(io, db) {
       const subserverRole = db.prepare(`
         SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
         JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = ? AND r.scope = 'server' AND ur.channel_id IS NULL AND ur.server_id = ?
+        WHERE ur.user_id = ? AND r.scope = 'server' AND r.is_cosmetic = 0 AND ur.channel_id IS NULL AND ur.server_id = ?
       `).get(userId, serverId);
       if (subserverRole?.maxLevel && subserverRole.maxLevel > level) {
         level = subserverRole.maxLevel;
@@ -266,7 +266,7 @@ function setupSocketHandlers(io, db) {
         const channelRole = db.prepare(`
           SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
           JOIN user_roles ur ON r.id = ur.role_id
-          WHERE ur.user_id = ? AND ur.channel_id IN (${placeholders})
+          WHERE ur.user_id = ? AND r.is_cosmetic = 0 AND ur.channel_id IN (${placeholders})
         `).get(userId, ...chain);
         if (channelRole && channelRole.maxLevel && channelRole.maxLevel > level) {
           level = channelRole.maxLevel;
@@ -448,7 +448,7 @@ function setupSocketHandlers(io, db) {
 
   function getUserRoles(userId) {
     return db.prepare(`
-      SELECT r.id, r.name, COALESCE(ur.custom_level, r.level) AS level, r.scope, r.color, ur.server_id, ur.channel_id
+      SELECT r.id, r.name, COALESCE(ur.custom_level, r.level) AS level, r.scope, r.color, r.is_cosmetic, ur.server_id, ur.channel_id
       FROM roles r
       JOIN user_roles ur ON r.id = ur.role_id
       WHERE ur.user_id = ?
@@ -466,7 +466,7 @@ function setupSocketHandlers(io, db) {
   function getVisibleProxiesForUser(targetUserId, viewerId) {
     const canViewPrivate = targetUserId === viewerId || canModerateUserProxies(viewerId);
     const rows = db.prepare(`
-      SELECT id, user_id, name, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public, created_at, updated_at
+      SELECT id, user_id, name, proxy_type, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public, created_at, updated_at
       FROM proxies
       WHERE user_id = ?
         AND (? = 1 OR is_public = 1)
@@ -478,6 +478,7 @@ function setupSocketHandlers(io, db) {
       id: row.id,
       userId: row.user_id,
       name: row.name,
+      proxyType: row.proxy_type || 'alter',
       bio: row.bio || '',
       avatarUrl: row.avatar_url || null,
       triggerPrefix: row.trigger_prefix,
@@ -511,7 +512,7 @@ function setupSocketHandlers(io, db) {
     const trimmed = typeof rawContent === 'string' ? rawContent.trim() : '';
     if (!trimmed) return null;
     const proxies = db.prepare(`
-      SELECT id, name, avatar_url, trigger_prefix, trigger_suffix
+      SELECT id, name, proxy_type, avatar_url, trigger_prefix, trigger_suffix
       FROM proxies
       WHERE user_id = ?
       ORDER BY LENGTH(trigger_prefix) DESC, LENGTH(trigger_suffix) DESC, id ASC
@@ -528,6 +529,7 @@ function setupSocketHandlers(io, db) {
       return {
         id: proxy.id,
         name: proxy.name,
+        proxyType: proxy.proxy_type || 'alter',
         avatar: proxy.avatar_url || null,
         content: body
       };
@@ -590,7 +592,7 @@ function setupSocketHandlers(io, db) {
   function getVisibleServers(userId, isAdmin) {
     if (isAdmin) {
       return db.prepare(`
-        SELECT s.id, s.name, s.code, s.icon_url, s.created_by, s.created_at, s.position,
+        SELECT s.id, s.name, s.code, s.icon_url, s.theme, s.created_by, s.created_at, s.position,
                (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
         FROM servers s
         ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
@@ -598,7 +600,7 @@ function setupSocketHandlers(io, db) {
     }
 
     return db.prepare(`
-      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.created_by, s.created_at, s.position,
+      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.theme, s.created_by, s.created_at, s.position,
              (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
       FROM servers s
       JOIN channels c ON c.server_id = s.id AND c.is_dm = 0
@@ -1168,11 +1170,12 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO servers (name, code, icon_url, created_by, position) VALUES (?, ?, ?, ?, ?)'
+          'INSERT INTO servers (name, code, icon_url, theme, created_by, position) VALUES (?, ?, ?, ?, ?, ?)'
         ).run(
           name,
           generateServerCode(),
           String(data.iconUrl || '').trim(),
+          String(data.theme || '').trim(),
           socket.user.id,
           Number(db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS nextPos FROM servers').get()?.nextPos || 1)
         );
@@ -1204,10 +1207,11 @@ function setupSocketHandlers(io, db) {
       if (!server) return cb({ error: 'Server not found' });
       const name = typeof data.name === 'string' ? data.name.trim() : '';
       const iconUrl = typeof data.iconUrl === 'string' ? data.iconUrl.trim() : '';
+      const theme = typeof data.theme === 'string' ? data.theme.trim() : '';
       if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
 
       try {
-        db.prepare('UPDATE servers SET name = ?, icon_url = ? WHERE id = ?').run(name, iconUrl, serverId);
+        db.prepare('UPDATE servers SET name = ?, icon_url = ?, theme = ? WHERE id = ?').run(name, iconUrl, theme, serverId);
         emitServersList(socket);
         broadcastChannelLists();
         cb({ ok: true });
@@ -1600,7 +1604,7 @@ function setupSocketHandlers(io, db) {
       let messages;
       if (before) {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ? AND m.id < ?
@@ -1608,7 +1612,7 @@ function setupSocketHandlers(io, db) {
         `).all(channel.id, before, limit);
       } else if (after) {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ? AND m.id > ?
@@ -1616,7 +1620,7 @@ function setupSocketHandlers(io, db) {
         `).all(channel.id, after, limit);
       } else {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ?
@@ -1722,6 +1726,7 @@ function setupSocketHandlers(io, db) {
           obj.proxy_id = m.proxy_id;
           obj.proxy_name = m.proxy_name;
           obj.proxy_avatar = m.proxy_avatar || null;
+          obj.proxy_type = m.proxy_type || 'alter';
           obj.avatar = m.proxy_avatar || null;
           obj.username = m.proxy_name;
         }
@@ -1851,8 +1856,8 @@ function setupSocketHandlers(io, db) {
           const finalContent = slashResult.content;
 
           const result = db.prepare(
-            'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).run(channel.id, socket.user.id, finalContent, null, null, null, null);
+            'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar, proxy_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          ).run(channel.id, socket.user.id, finalContent, null, null, null, null, null);
 
           const message = {
             id: result.lastInsertRowid,
@@ -1895,8 +1900,8 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(channel.id, socket.user.id, safeContent, replyTo, proxyMatch?.id || null, proxyMatch?.name || null, proxyMatch?.avatar || null);
+          'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar, proxy_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(channel.id, socket.user.id, safeContent, replyTo, proxyMatch?.id || null, proxyMatch?.name || null, proxyMatch?.avatar || null, proxyMatch?.proxyType || null);
 
         const message = {
           id: result.lastInsertRowid,
@@ -1915,6 +1920,7 @@ function setupSocketHandlers(io, db) {
           message.proxy_id = proxyMatch.id;
           message.proxy_name = proxyMatch.name;
           message.proxy_avatar = proxyMatch.avatar || null;
+          message.proxy_type = proxyMatch.proxyType || 'alter';
         }
 
         // Attach reply context if replying
@@ -4127,7 +4133,7 @@ function setupSocketHandlers(io, db) {
       const key = typeof data.key === 'string' ? data.key.trim() : '';
       const value = typeof data.value === 'string' ? data.value.trim() : '';
 
-      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'max_poll_options', 'max_sound_kb', 'max_emoji_kb', 'max_proxy_avatar_kb', 'setup_wizard_complete', 'default_theme', 'channel_sort_mode'];
+      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'cleanup_messages_mb', 'cleanup_attachments_mb', 'cleanup_emojis_mb', 'cleanup_sounds_mb', 'cleanup_proxy_avatars_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'max_poll_options', 'max_sound_kb', 'max_emoji_kb', 'max_proxy_avatar_kb', 'setup_wizard_complete', 'default_theme', 'channel_sort_mode'];
       if (!allowedKeys.includes(key)) return;
 
       if (key === 'member_visibility' && !['all', 'online', 'none'].includes(value)) return;
@@ -4137,6 +4143,10 @@ function setupSocketHandlers(io, db) {
         if (isNaN(n) || n < 0 || n > 3650) return;
       }
       if (key === 'cleanup_max_size_mb') {
+        const n = parseInt(value);
+        if (isNaN(n) || n < 0 || n > 100000) return;
+      }
+      if (['cleanup_messages_mb', 'cleanup_attachments_mb', 'cleanup_emojis_mb', 'cleanup_sounds_mb', 'cleanup_proxy_avatars_mb'].includes(key)) {
         const n = parseInt(value);
         if (isNaN(n) || n < 0 || n > 100000) return;
       }
@@ -4607,6 +4617,7 @@ function setupSocketHandlers(io, db) {
       const groupName = sanitizeText(String(data.groupName || '').trim()).slice(0, 30);
       const avatarUrl = data.avatarUrl ? String(data.avatarUrl).trim() : '';
       const isPublic = data.isPublic !== false;
+      const proxyType = data.proxyType === 'character' ? 'character' : 'alter';
 
       if (!name) return callback({ error: 'Proxy name is required' });
       if (!triggerPrefix) return callback({ error: 'Trigger prefix is required' });
@@ -4618,16 +4629,16 @@ function setupSocketHandlers(io, db) {
           if (!existing || existing.user_id !== socket.user.id) return callback({ error: 'Proxy not found' });
           db.prepare(`
             UPDATE proxies
-            SET name = ?, bio = ?, avatar_url = ?, trigger_prefix = ?, trigger_suffix = ?, group_name = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
+            SET name = ?, proxy_type = ?, bio = ?, avatar_url = ?, trigger_prefix = ?, trigger_suffix = ?, group_name = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).run(name, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0, proxyId);
+          `).run(name, proxyType, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0, proxyId);
         } else {
           const count = db.prepare('SELECT COUNT(*) AS cnt FROM proxies WHERE user_id = ?').get(socket.user.id)?.cnt || 0;
           if (count >= 100) return callback({ error: 'You can create up to 100 proxies' });
           db.prepare(`
-            INSERT INTO proxies (user_id, name, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(socket.user.id, name, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0);
+            INSERT INTO proxies (user_id, name, proxy_type, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(socket.user.id, name, proxyType, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0);
         }
 
         callback({ ok: true, proxies: getVisibleProxiesForUser(socket.user.id, socket.user.id) });
@@ -5730,7 +5741,8 @@ function setupSocketHandlers(io, db) {
       const name = isString(data.name, 1, 30) ? data.name.trim() : '';
       if (!name) return cb({ error: 'Role name required (1-30 chars)' });
 
-      const level = isInt(data.level) && data.level >= 1 && data.level <= 99 ? data.level : 25;
+      const isCosmetic = !!data.isCosmetic;
+      const level = isInt(data.level) && data.level >= (isCosmetic ? 0 : 1) && data.level <= 99 ? data.level : (isCosmetic ? 0 : 25);
       const scope = data.scope === 'channel' ? 'channel' : 'server';
       const color = isString(data.color, 4, 7) && /^#[0-9a-fA-F]{3,6}$/.test(data.color) ? data.color : null;
       const autoAssign = data.autoAssign ? 1 : 0;
@@ -5740,7 +5752,7 @@ function setupSocketHandlers(io, db) {
         if (autoAssign) {
           db.prepare('UPDATE roles SET auto_assign = 0').run();
         }
-        const result = db.prepare('INSERT INTO roles (name, level, scope, color, auto_assign) VALUES (?, ?, ?, ?, ?)').run(name, level, scope, color, autoAssign);
+        const result = db.prepare('INSERT INTO roles (name, level, scope, color, auto_assign, is_cosmetic) VALUES (?, ?, ?, ?, ?, ?)').run(name, level, scope, color, autoAssign, isCosmetic ? 1 : 0);
 
         // Add permissions
         const perms = Array.isArray(data.permissions) ? data.permissions : [];
@@ -5779,7 +5791,7 @@ function setupSocketHandlers(io, db) {
         const values = [];
 
         if (isString(data.name, 1, 30)) { updates.push('name = ?'); values.push(data.name.trim()); }
-        if (isInt(data.level) && data.level >= 1 && data.level <= 99) { updates.push('level = ?'); values.push(data.level); }
+        if (isInt(data.level) && data.level >= 0 && data.level <= 99) { updates.push('level = ?'); values.push(data.level); }
         if (data.color !== undefined) {
           const safeColor = (isString(data.color, 4, 7) && /^#[0-9a-fA-F]{3,6}$/.test(data.color)) ? data.color : null;
           updates.push('color = ?'); values.push(safeColor);
@@ -5789,6 +5801,9 @@ function setupSocketHandlers(io, db) {
             db.prepare('UPDATE roles SET auto_assign = 0').run();
           }
           updates.push('auto_assign = ?'); values.push(data.autoAssign ? 1 : 0);
+        }
+        if (data.isCosmetic !== undefined) {
+          updates.push('is_cosmetic = ?'); values.push(data.isCosmetic ? 1 : 0);
         }
         if (data.linkChannelAccess !== undefined) {
           updates.push('link_channel_access = ?'); values.push(data.linkChannelAccess ? 1 : 0);
