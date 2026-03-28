@@ -318,14 +318,6 @@ _applyServerSettings() {
     if (cleanupSize && this.serverSettings.cleanup_max_size_mb) {
       cleanupSize.value = this.serverSettings.cleanup_max_size_mb;
     }
-    const cleanupMessages = document.getElementById('cleanup-messages-mb');
-    if (cleanupMessages) cleanupMessages.value = this.serverSettings.cleanup_messages_mb || '0';
-    const cleanupAttachments = document.getElementById('cleanup-attachments-mb');
-    if (cleanupAttachments) cleanupAttachments.value = this.serverSettings.cleanup_attachments_mb || '0';
-    const cleanupEmojis = document.getElementById('cleanup-emojis-mb');
-    if (cleanupEmojis) cleanupEmojis.value = this.serverSettings.cleanup_emojis_mb || '0';
-    const cleanupSounds = document.getElementById('cleanup-sounds-mb');
-    if (cleanupSounds) cleanupSounds.value = this.serverSettings.cleanup_sounds_mb || '0';
     const maxUpload = document.getElementById('max-upload-mb');
     if (maxUpload) {
       maxUpload.value = this.serverSettings.max_upload_mb || '25';
@@ -440,10 +432,6 @@ _snapshotAdminSettings() {
     cleanup_enabled: this.serverSettings.cleanup_enabled || 'false',
     cleanup_max_age_days: this.serverSettings.cleanup_max_age_days || '0',
     cleanup_max_size_mb: this.serverSettings.cleanup_max_size_mb || '0',
-    cleanup_messages_mb: this.serverSettings.cleanup_messages_mb || '0',
-    cleanup_attachments_mb: this.serverSettings.cleanup_attachments_mb || '0',
-    cleanup_emojis_mb: this.serverSettings.cleanup_emojis_mb || '0',
-    cleanup_sounds_mb: this.serverSettings.cleanup_sounds_mb || '0',
     whitelist_enabled: this.serverSettings.whitelist_enabled || 'false',
     max_upload_mb: this.serverSettings.max_upload_mb || '25',
     max_sound_kb: this.serverSettings.max_sound_kb || '1024',
@@ -451,7 +439,8 @@ _snapshotAdminSettings() {
     max_proxy_avatar_kb: this.serverSettings.max_proxy_avatar_kb || '256',
     max_poll_options: this.serverSettings.max_poll_options || '10',
     default_theme: this.serverSettings.default_theme || '',
-    subserver_name: this._getCurrentServerMeta?.()?.name || ''
+    subserver_name: this._getCurrentServerMeta?.()?.name || '',
+    subserver_theme_override: !!this._getCurrentServerMeta?.()?.theme_force_override
   };
   // Load webhooks list for admin preview
   if (this.user?.isAdmin) {
@@ -502,27 +491,6 @@ _saveAdminSettings() {
     this.socket.emit('update-server-setting', { key: 'cleanup_max_size_mb', value: cleanSize });
     changed = true;
   }
-  const cleanMessages = String(Math.max(0, Math.min(100000, parseInt(document.getElementById('cleanup-messages-mb')?.value) || 0)));
-  if (cleanMessages !== (snap.cleanup_messages_mb || '0')) {
-    this.socket.emit('update-server-setting', { key: 'cleanup_messages_mb', value: cleanMessages });
-    changed = true;
-  }
-  const cleanAttachments = String(Math.max(0, Math.min(100000, parseInt(document.getElementById('cleanup-attachments-mb')?.value) || 0)));
-  if (cleanAttachments !== (snap.cleanup_attachments_mb || '0')) {
-    this.socket.emit('update-server-setting', { key: 'cleanup_attachments_mb', value: cleanAttachments });
-    changed = true;
-  }
-  const cleanEmojis = String(Math.max(0, Math.min(100000, parseInt(document.getElementById('cleanup-emojis-mb')?.value) || 0)));
-  if (cleanEmojis !== (snap.cleanup_emojis_mb || '0')) {
-    this.socket.emit('update-server-setting', { key: 'cleanup_emojis_mb', value: cleanEmojis });
-    changed = true;
-  }
-  const cleanSounds = String(Math.max(0, Math.min(100000, parseInt(document.getElementById('cleanup-sounds-mb')?.value) || 0)));
-  if (cleanSounds !== (snap.cleanup_sounds_mb || '0')) {
-    this.socket.emit('update-server-setting', { key: 'cleanup_sounds_mb', value: cleanSounds });
-    changed = true;
-  }
-
   const wlEnabled = document.getElementById('whitelist-enabled')?.checked ? 'true' : 'false';
   if (wlEnabled !== snap.whitelist_enabled) {
     this.socket.emit('whitelist-toggle', { enabled: wlEnabled === 'true' });
@@ -569,12 +537,14 @@ _saveAdminSettings() {
   const selectedServer = this._getCurrentServerMeta?.();
   const subserverName = document.getElementById('subserver-name-input')?.value.trim() || '';
   const subserverTheme = document.getElementById('subserver-theme-select')?.value || '';
-  if (selectedServer?.id && ((subserverName && subserverName !== (snap.subserver_name || '')) || subserverTheme !== (selectedServer.theme || ''))) {
+  const subserverThemeOverride = !!document.getElementById('subserver-theme-override')?.checked;
+  if (selectedServer?.id && ((subserverName && subserverName !== (snap.subserver_name || '')) || subserverTheme !== (selectedServer.theme || '') || subserverThemeOverride !== !!snap.subserver_theme_override)) {
     this.socket.emit('update-subserver', {
       serverId: selectedServer.id,
       name: subserverName,
       iconUrl: selectedServer.icon_url || '',
-      theme: subserverTheme
+      theme: subserverTheme,
+      themeForceOverride: subserverThemeOverride
     }, (res) => {
       if (!res?.error) this.socket.emit('get-servers');
     });
@@ -604,14 +574,6 @@ _cancelAdminSettings() {
     if (ca) ca.value = snap.cleanup_max_age_days;
     const cs = document.getElementById('cleanup-max-size');
     if (cs) cs.value = snap.cleanup_max_size_mb;
-    const cm = document.getElementById('cleanup-messages-mb');
-    if (cm) cm.value = snap.cleanup_messages_mb || '0';
-    const cat = document.getElementById('cleanup-attachments-mb');
-    if (cat) cat.value = snap.cleanup_attachments_mb || '0';
-    const cem = document.getElementById('cleanup-emojis-mb');
-    if (cem) cem.value = snap.cleanup_emojis_mb || '0';
-    const csn = document.getElementById('cleanup-sounds-mb');
-    if (csn) csn.value = snap.cleanup_sounds_mb || '0';
     const wl = document.getElementById('whitelist-enabled');
     if (wl) wl.checked = snap.whitelist_enabled === 'true';
     const mu = document.getElementById('max-upload-mb');
@@ -628,6 +590,8 @@ _cancelAdminSettings() {
     if (dt) dt.value = snap.default_theme || '';
     const ssn = document.getElementById('subserver-name-input');
     if (ssn) ssn.value = snap.subserver_name || '';
+    const sto = document.getElementById('subserver-theme-override');
+    if (sto) sto.checked = !!snap.subserver_theme_override;
   }
   document.getElementById('settings-modal').style.display = 'none';
 },
