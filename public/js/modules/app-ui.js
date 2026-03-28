@@ -4027,10 +4027,10 @@ _prepareSettingsLayout() {
   }
 
   if (settingsBody) {
+    if (sessionSection) settingsBody.insertBefore(sessionSection, adminPanel || null);
     if (subserverSection) settingsBody.insertBefore(subserverSection, adminPanel || null);
     if (serverChannelsSection) settingsBody.insertBefore(serverChannelsSection, adminPanel || null);
     if (inviteSection) settingsBody.insertBefore(inviteSection, adminPanel || null);
-    if (sessionSection) settingsBody.insertBefore(sessionSection, adminPanel || null);
   }
 
   if (settingsBody && !document.getElementById('section-admin-password-reset')) {
