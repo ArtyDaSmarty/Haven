@@ -118,7 +118,7 @@ if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
 const vapidEmail = process.env.VAPID_EMAIL || 'mailto:admin@haven.local';
 webpush.setVapidDetails(vapidEmail, process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
 
-const { initDatabase } = require('./src/database');
+const { initDatabase, getDb } = require('./src/database');
 const { router: authRoutes, authLimiter, verifyToken } = require('./src/auth');
 const { setupSocketHandlers, sanitizeText } = require('./src/socketHandlers');
 const { startTunnel, stopTunnel, getTunnelStatus, registerProcessCleanup } = require('./src/tunnel');
@@ -2620,10 +2620,6 @@ async function runAutoCleanup() {
 
     const maxAgeDays = parseInt(getSetting('cleanup_max_age_days') || '0');
     const maxSizeMb = parseInt(getSetting('cleanup_max_size_mb') || '0');
-    const maxMessagesMb = parseInt(getSetting('cleanup_messages_mb') || '0');
-    const maxAttachmentsMb = parseInt(getSetting('cleanup_attachments_mb') || '0');
-    const maxEmojisMb = parseInt(getSetting('cleanup_emojis_mb') || '0');
-    const maxSoundsMb = parseInt(getSetting('cleanup_sounds_mb') || '0');
     let totalDeleted = 0;
 
     // 1. Delete messages older than N days (skip archived/protected messages and exempt channels)
@@ -2665,80 +2661,6 @@ async function runAutoCleanup() {
           totalDeleted += oldestIds.length;
         }
       }
-    }
-
-    if (maxMessagesMb > 0) {
-      const limitBytes = maxMessagesMb * 1024 * 1024;
-      let currentBytes = db.prepare('SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM messages WHERE is_archived = 0 AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)').get()?.total || 0;
-      if (currentBytes > limitBytes) {
-        const rows = db.prepare(`
-          SELECT id, LENGTH(content) AS bytes
-          FROM messages
-          WHERE is_archived = 0 AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)
-          ORDER BY datetime(created_at) ASC, id ASC
-        `).all();
-        for (const row of rows) {
-          if (currentBytes <= limitBytes) break;
-          db.prepare('DELETE FROM reactions WHERE message_id = ?').run(row.id);
-          db.prepare('DELETE FROM messages WHERE id = ?').run(row.id);
-          currentBytes -= row.bytes || 0;
-          totalDeleted++;
-        }
-      }
-    }
-
-    if (maxAttachmentsMb > 0) {
-      const limitBytes = maxAttachmentsMb * 1024 * 1024;
-      const attachmentRows = db.prepare(`
-        SELECT id, content, created_at
-        FROM messages
-        WHERE is_archived = 0
-          AND channel_id NOT IN (SELECT id FROM channels WHERE cleanup_exempt = 1)
-          AND content LIKE '%/uploads/%'
-        ORDER BY datetime(created_at) ASC, id ASC
-      `).all();
-      let currentBytes = attachmentRows.reduce((sum, row) => sum + extractUploadNames(row.content).reduce((inner, name) => inner + getFileSizeSafe(path.join(UPLOADS_DIR, name)), 0), 0);
-      for (const row of attachmentRows) {
-        if (currentBytes <= limitBytes) break;
-        const uploadNames = extractUploadNames(row.content);
-        for (const name of uploadNames) {
-          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
-          await deleteUploadByName(name).catch(() => {});
-        }
-        db.prepare('DELETE FROM reactions WHERE message_id = ?').run(row.id);
-        db.prepare('DELETE FROM messages WHERE id = ?').run(row.id);
-        totalDeleted++;
-      }
-    }
-
-    if (maxEmojisMb > 0) {
-      const limitBytes = maxEmojisMb * 1024 * 1024;
-      try {
-        const rows = db.prepare('SELECT id, filename FROM custom_emojis ORDER BY datetime(created_at) ASC, id ASC').all();
-        let currentBytes = rows.reduce((sum, row) => sum + getFileSizeSafe(path.join(UPLOADS_DIR, path.basename(row.filename))), 0);
-        for (const row of rows) {
-          if (currentBytes <= limitBytes) break;
-          const name = path.basename(row.filename);
-          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
-          await deleteUploadByName(name).catch(() => {});
-          db.prepare('DELETE FROM custom_emojis WHERE id = ?').run(row.id);
-        }
-      } catch {}
-    }
-
-    if (maxSoundsMb > 0) {
-      const limitBytes = maxSoundsMb * 1024 * 1024;
-      try {
-        const rows = db.prepare('SELECT id, filename FROM custom_sounds ORDER BY datetime(created_at) ASC, id ASC').all();
-        let currentBytes = rows.reduce((sum, row) => sum + getFileSizeSafe(path.join(UPLOADS_DIR, path.basename(row.filename))), 0);
-        for (const row of rows) {
-          if (currentBytes <= limitBytes) break;
-          const name = path.basename(row.filename);
-          currentBytes -= getFileSizeSafe(path.join(UPLOADS_DIR, name));
-          await deleteUploadByName(name).catch(() => {});
-          db.prepare('DELETE FROM custom_sounds WHERE id = ?').run(row.id);
-        }
-      } catch {}
     }
 
     // Also clean up old uploaded files if age cleanup is set
