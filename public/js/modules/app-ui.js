@@ -3902,9 +3902,21 @@ _prepareSettingsLayout() {
     channels.className = 'settings-nav-item';
     channels.dataset.target = 'section-server-channels';
     channels.textContent = '📋 Channels';
+    const invite = document.createElement('div');
+    invite.className = 'settings-nav-item';
+    invite.dataset.target = 'section-invite';
+    invite.textContent = '🌐 Invite Code';
     settingsNav.insertBefore(serverGroup, adminGroup || null);
     settingsNav.insertBefore(customization, adminGroup || null);
     settingsNav.insertBefore(channels, adminGroup || null);
+    settingsNav.insertBefore(invite, adminGroup || null);
+  }
+
+  const inviteNav = settingsNav?.querySelector('.settings-nav-item[data-target="section-invite"]');
+  if (inviteNav) {
+    inviteNav.classList.remove('settings-nav-admin');
+    inviteNav.style.display = '';
+    settingsNav.insertBefore(inviteNav, adminGroup || null);
   }
 
   const subserverSection = document.getElementById('section-subserver');
@@ -3982,6 +3994,11 @@ _prepareSettingsLayout() {
       }
     }
     section.querySelector('#server-organize-channels-btn')?.addEventListener('click', () => document.getElementById('organize-channels-btn')?.click());
+  }
+
+  const inviteSection = document.getElementById('section-invite');
+  if (settingsBody && inviteSection) {
+    settingsBody.insertBefore(inviteSection, document.getElementById('section-logout') || adminPanel || null);
   }
 
   if (settingsBody && !document.getElementById('section-admin-password-reset')) {
