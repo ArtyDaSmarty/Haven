@@ -81,7 +81,11 @@ async function resolveSpotifyToYouTube(spotifyUrl) {
     for (const q of queries) {
       const results = await searchYouTube(q, 1);
       if (results.length > 0) {
-        return `https://www.youtube.com/watch?v=${results[0].videoId}`;
+        return {
+          url: `https://www.youtube.com/watch?v=${results[0].videoId}`,
+          title,
+          duration: results[0].duration || ''
+        };
       }
     }
     return null;
@@ -190,6 +194,18 @@ async function searchYouTube(query, count = 5, offset = 0) {
     return [];
   }
 }
+
+// All recognized role permissions. Any permission sent by a client that is not here is silently rejected.
+const VALID_ROLE_PERMS = [
+  'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
+  'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
+  'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
+  'create_channel', 'create_forum_posts', 'upload_files', 'use_voice', 'use_tts',
+  'manage_webhooks', 'mention_everyone', 'view_history', 'view_all_members',
+  'manage_emojis', 'manage_soundboard', 'manage_music_queue',
+  'promote_user', 'transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'
+];
+
 function setupSocketHandlers(io, db) {
   const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
 
@@ -2114,9 +2130,12 @@ function setupSocketHandlers(io, db) {
       // Spotify embeds are 30-second preview only (non-premium) with no external API
       const isSpotify = /open\.spotify\.com\/(track|album|playlist|episode|show)\/[a-zA-Z0-9]+/.test(data.url);
       if (isSpotify) {
-        const ytUrl = await resolveSpotifyToYouTube(data.url);
-        if (ytUrl) {
-          playUrl = ytUrl;
+        const resolved = await resolveSpotifyToYouTube(data.url);
+        if (resolved?.url) {
+          playUrl = resolved.url;
+          resolvedFrom = 'spotify';
+        } else if (typeof resolved === 'string' && resolved) {
+          playUrl = resolved;
           resolvedFrom = 'spotify';
         } else {
           // Resolution failed — notify the sharer instead of passing a broken embed
@@ -3760,14 +3779,7 @@ function setupSocketHandlers(io, db) {
         try {
           const obj = JSON.parse(value);
           if (typeof obj !== 'object' || Array.isArray(obj)) return;
-          const validPerms = [
-            'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
-            'pin_message', 'kick_user', 'mute_user', 'ban_user',
-            'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
-            'create_forum_posts', 'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
-            'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
-            'manage_roles', 'manage_server', 'delete_channel'
-          ];
+          const validPerms = VALID_ROLE_PERMS;
           for (const [k, v] of Object.entries(obj)) {
             if (!validPerms.includes(k)) return;
             if (!Number.isInteger(v) || v < 1 || v > 100) return;
@@ -5308,14 +5320,7 @@ function setupSocketHandlers(io, db) {
 
         // Add permissions
         const perms = Array.isArray(data.permissions) ? data.permissions : [];
-        const validPerms = [
-          'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
-          'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-          'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
-          'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
-          'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
-          'manage_roles', 'manage_server', 'delete_channel'
-        ];
+        const validPerms = VALID_ROLE_PERMS;
         // Escalation guard: non-admins cannot grant permissions they don't have
         const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'];
         const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
@@ -5372,14 +5377,7 @@ function setupSocketHandlers(io, db) {
 
         // Update permissions
         if (Array.isArray(data.permissions)) {
-          const validPerms = [
-            'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
-            'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-            'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
-            'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
-            'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard',
-            'manage_roles', 'manage_server', 'delete_channel', 'view_all_members'
-          ];
+          const validPerms = [...VALID_ROLE_PERMS];
           // Escalation guard: non-admins cannot grant permissions they don't have
           const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'delete_channel'];
           db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(roleId);
@@ -5442,16 +5440,16 @@ function setupSocketHandlers(io, db) {
         const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
 
         const serverMod = insertRole.run('Server Mod', 50, 'server', '#3498db');
-        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','create_forum_posts','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','delete_own_messages','edit_own_messages']
+        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','create_forum_posts','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','manage_music_queue','delete_own_messages','edit_own_messages']
           .forEach(p => insertPerm.run(serverMod.lastInsertRowid, p));
 
         const channelMod = insertRole.run('Channel Mod', 25, 'channel', '#2ecc71');
-        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','create_forum_posts','delete_lower_messages','upload_files','use_voice','view_history','delete_own_messages','edit_own_messages']
+        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','create_forum_posts','delete_lower_messages','upload_files','use_voice','view_history','manage_music_queue','delete_own_messages','edit_own_messages']
           .forEach(p => insertPerm.run(channelMod.lastInsertRowid, p));
 
         const userRole = insertRole.run('User', 1, 'server', '#95a5a6');
         db.prepare('UPDATE roles SET auto_assign = 1 WHERE id = ?').run(userRole.lastInsertRowid);
-        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history','create_forum_posts']
+        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history','use_tts','create_forum_posts']
           .forEach(p => insertPerm.run(userRole.lastInsertRowid, p));
 
         // Auto-assign the User role to all existing users
@@ -5968,13 +5966,7 @@ function setupSocketHandlers(io, db) {
             const r = db.prepare("INSERT INTO roles (name, level, scope, color) VALUES ('Former Admin', 99, 'server', '#e74c3c')").run();
             formerAdminRole = { id: r.lastInsertRowid };
             // Give all permissions
-            const allPerms = [
-              'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
-              'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
-              'manage_sub_channels', 'rename_channel', 'rename_sub_channel', 'create_forum_posts',
-              'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
-              'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
-            ];
+            const allPerms = [...VALID_ROLE_PERMS];
             const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
             allPerms.forEach(p => insertPerm.run(formerAdminRole.id, p));
           }
@@ -6907,6 +6899,7 @@ function setupSocketHandlers(io, db) {
         spoiler:   () => arg ? ({ content: `||${arg}||` }) : null,
         tts:       () => {
           if (!arg) return null;
+          if (!userHasPermission(socket.user.id, 'use_tts')) return { content: '_You do not have permission to use TTS._' };
           // Cap TTS content length to prevent abuse
           const ttsContent = arg.length > 500 ? arg.slice(0, 500) + '…' : arg;
           return { content: ttsContent, tts: true };
