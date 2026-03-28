@@ -1009,11 +1009,17 @@ function setupSocketHandlers(io, db) {
 
     // ── Helper: get enriched channel list for a user ───────
     function getEnrichedChannels(userId, isAdmin, joinRooms) {
+      try {
+        const announcements = db.prepare("SELECT id FROM channels WHERE special_section = 'announcements' LIMIT 1").get();
+        if (announcements?.id) {
+          db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(announcements.id, userId);
+        }
+      } catch { /* non-critical */ }
       let channels;
       if (isAdmin) {
         // Admins see ALL non-DM channels plus their own DMs
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -1021,7 +1027,7 @@ function setupSocketHandlers(io, db) {
           FROM channels c
           WHERE c.is_dm = 0
           UNION
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -1038,7 +1044,7 @@ function setupSocketHandlers(io, db) {
         });
       } else {
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm,
+          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
@@ -1804,13 +1810,16 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', `You are muted for ${remaining} more minute${remaining !== 1 ? 's' : ''}`);
       }
 
-      const channel = db.prepare('SELECT id, name, slow_mode_interval, text_enabled, voice_enabled, media_enabled FROM channels WHERE code = ?').get(code);
+      const channel = db.prepare('SELECT id, name, slow_mode_interval, text_enabled, voice_enabled, media_enabled, special_section FROM channels WHERE code = ?').get(code);
       if (!channel) return socket.emit('error-msg', 'Channel not found — try switching channels and back');
 
       const member = db.prepare(
         'SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?'
       ).get(channel.id, socket.user.id);
       if (!member) return socket.emit('error-msg', 'Not a member of this channel');
+      if (channel.special_section === 'announcements' && !socket.user.isAdmin) {
+        return socket.emit('error-msg', 'Only the instance admin can post in Admin Announcements');
+      }
 
       // Block text messages when text is disabled (allow media uploads if media is enabled)
       if (channel.text_enabled === 0) {
