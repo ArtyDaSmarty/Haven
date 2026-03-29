@@ -28,6 +28,8 @@ _setupSocketListeners() {
     this.user.roles = data.roles || [];
     this.user.effectiveLevel = data.effectiveLevel || 0;
     this.user.permissions = data.permissions || [];
+    this.blockedUserIds = Array.isArray(data.blockedUserIds) ? data.blockedUserIds : [];
+    this.mutedUserIds = Array.isArray(data.mutedUserIds) ? data.mutedUserIds : [];
     if (this.voice && data.id) this.voice.localUserId = data.id;
     if (data.status) {
       this.userStatus = data.status;
@@ -58,7 +60,7 @@ _setupSocketListeners() {
     // Show server version in status bar
     {
       const vEl = document.getElementById('status-version');
-      if (vEl) vEl.textContent = 'v2.0';
+      if (vEl) vEl.textContent = `v${this.serverSettings?.display_version || '2.0'}`;
     }
     // Refresh display name + admin UI with authoritative data
     document.getElementById('current-user').textContent = this.user.displayName || this.user.username;
@@ -68,13 +70,13 @@ _setupSocketListeners() {
     this._updateAvatarPreview();
     // Show admin/mod controls based on role level
     const canModerate = this.user.isAdmin || this.user.effectiveLevel >= 25;
-    const canCreateChannel = this.user.isAdmin || this._hasPerm('create_channel');
-    document.getElementById('admin-controls').style.display = canCreateChannel ? 'block' : 'none';
     if (this.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
       document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
     }
+    const organizeBtn = document.getElementById('organize-channels-btn');
+    if (organizeBtn) organizeBtn.style.display = (this.user.isAdmin || this._hasPerm('create_channel') || this._hasPerm('manage_sub_channels')) ? '' : 'none';
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
   });
 
@@ -86,9 +88,9 @@ _setupSocketListeners() {
     localStorage.setItem('haven_user', JSON.stringify(this.user));
     // Refresh UI to reflect new permissions
     const canModerate = this.user.isAdmin || this.user.effectiveLevel >= 25;
-    const canCreateChannel = this.user.isAdmin || this._hasPerm('create_channel');
-    document.getElementById('admin-controls').style.display = canCreateChannel ? 'block' : 'none';
     document.getElementById('admin-mod-panel').style.display = (canModerate || this._hasPerm('manage_emojis') || this._hasPerm('manage_soundboard') || this._hasPerm('manage_server')) ? 'block' : 'none';
+    const organizeBtn = document.getElementById('organize-channels-btn');
+    if (organizeBtn) organizeBtn.style.display = (this.user.isAdmin || this._hasPerm('create_channel') || this._hasPerm('manage_sub_channels')) ? '' : 'none';
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     this._showToast('Your roles have been updated', 'info');
   });
@@ -107,6 +109,7 @@ _setupSocketListeners() {
     if (!this.currentServerId || !this.servers.find(s => s.id === this.currentServerId)) {
       this.currentServerId = this.servers[0]?.id || null;
     }
+    if (typeof this._applyServerBranding === 'function') this._applyServerBranding();
     if (typeof this._renderServerBar === 'function') this._renderServerBar();
     if (typeof this._refreshSelectedServerSettings === 'function') this._refreshSelectedServerSettings();
     if (typeof this._renderChannels === 'function') this._renderChannels();
@@ -370,6 +373,8 @@ _setupSocketListeners() {
 
   this.socket.on('message-history', async (data) => {
     if (data.channelCode !== this.currentChannel) return;
+    const blockedIds = new Set(this.blockedUserIds || []);
+    data.messages = (data.messages || []).filter(m => !m?.user_id || !blockedIds.has(m.user_id));
     // E2E: decrypt DM messages before rendering
     await this._decryptMessages(data.messages);
 
@@ -474,6 +479,7 @@ _setupSocketListeners() {
   }
 
   this.socket.on('new-message', async (data) => {
+    if (data?.message?.user_id && (this.blockedUserIds || []).includes(data.message.user_id)) return;
     // E2E: ensure partner key is available before decrypting
     const msgCh = this.channels.find(c => c.code === data.channelCode);
     if (msgCh && msgCh.is_dm && msgCh.dm_target && !this._dmPublicKeys[msgCh.dm_target.id]) {
@@ -517,7 +523,8 @@ _setupSocketListeners() {
       if (data.message.user_id !== this.user.id) {
         const _mutedChs = JSON.parse(localStorage.getItem('haven_muted_channels') || '[]');
         const _isMuted = _mutedChs.includes(data.channelCode);
-        if (!_isMuted) {
+        const _isMutedUser = (this.mutedUserIds || []).includes(data.message.user_id);
+        if (!_isMuted && !_isMutedUser) {
           // Check if message contains @mention of current user
           const mentionRegex = new RegExp(`@${this.user.username}\\b`, 'i');
           const _notifCh = this.channels.find(c => c.code === data.channelCode);
@@ -540,6 +547,7 @@ _setupSocketListeners() {
     } else {
       const _mutedChs2 = JSON.parse(localStorage.getItem('haven_muted_channels') || '[]');
       const _isMuted2 = _mutedChs2.includes(data.channelCode);
+      const _isMutedUser2 = (this.mutedUserIds || []).includes(data.message.user_id);
       // Only count unread for messages from other users — own message echoes arriving after a
       // channel switch (race condition) would otherwise trigger a ghost badge.
       if (data.message.user_id !== this.user.id) {
@@ -547,7 +555,7 @@ _setupSocketListeners() {
         this._updateBadge(data.channelCode);
       }
       // Don't play notification sounds for your own messages in other channels
-      if (data.message.user_id !== this.user.id && !_isMuted2) {
+      if (data.message.user_id !== this.user.id && !_isMuted2 && !_isMutedUser2) {
         // Check @mention even in other channels
         const mentionRegex = new RegExp(`@${this.user.username}\\b`, 'i');
         const _notifCh2 = this.channels.find(c => c.code === data.channelCode);
@@ -858,8 +866,6 @@ _setupSocketListeners() {
     this._showToast(`Display name changed to "${data.user.displayName || data.user.username}"`, 'success');
     // Refresh admin UI in case admin status changed
     this.user.permissions = data.user.permissions || this.user.permissions || [];
-    const canCreate = data.user.isAdmin || this._hasPerm('create_channel');
-    document.getElementById('admin-controls').style.display = canCreate ? 'block' : 'none';
     if (data.user.isAdmin) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     } else {
@@ -1076,6 +1082,8 @@ _setupSocketListeners() {
   this.socket.on('server-settings', (settings) => {
     this.serverSettings = settings;
     this._applyServerSettings();
+    const vEl = document.getElementById('status-version');
+    if (vEl) vEl.textContent = `v${this.serverSettings?.display_version || '2.0'}`;
     if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
     this._maybeShowSetupWizard();
   });
@@ -1083,6 +1091,16 @@ _setupSocketListeners() {
   this.socket.on('server-setting-changed', (data) => {
     this.serverSettings[data.key] = data.value;
     this._applyServerSettings();
+    if (data.key === 'display_version') {
+      const vEl = document.getElementById('status-version');
+      if (vEl) vEl.textContent = `v${data.value || '2.0'}`;
+    }
+  });
+
+  this.socket.on('user-relations-updated', (data) => {
+    this.blockedUserIds = Array.isArray(data?.blockedUserIds) ? data.blockedUserIds : [];
+    this.mutedUserIds = Array.isArray(data?.mutedUserIds) ? data.mutedUserIds : [];
+    if (this.currentChannel) this.socket.emit('get-messages', { code: this.currentChannel });
   });
 
   // ── Webhooks list ──────────────────────────────────
@@ -1106,19 +1124,7 @@ _setupSocketListeners() {
   // ── User preferences (persistent theme etc.) ───────
   this.socket.on('preferences', (prefs) => {
     this.preferences = prefs || {};
-    const selectedServer = (this.servers || []).find(s => s.id === this.currentServerId);
-    if (selectedServer?.theme && selectedServer?.theme_force_override) {
-      applyThemeFromServer(selectedServer.theme);
-    } else if (prefs.theme) {
-      applyThemeFromServer(prefs.theme);
-      localStorage.setItem('haven_user_theme_override', '1');
-    } else if (localStorage.getItem('haven_user_theme_override') === '1' && localStorage.getItem('haven_theme')) {
-      applyThemeFromServer(localStorage.getItem('haven_theme'));
-    } else if (selectedServer?.theme) {
-      applyThemeFromServer(selectedServer.theme);
-    } else if (this.serverSettings.default_theme) {
-      applyThemeFromServer(this.serverSettings.default_theme);
-    }
+    if (typeof this._applyThemePreferenceStack === 'function') this._applyThemePreferenceStack();
   });
 
   // ── Search results ─────────────────────────────────
@@ -1126,10 +1132,11 @@ _setupSocketListeners() {
     const panel = document.getElementById('search-results-panel');
     const list = document.getElementById('search-results-list');
     const count = document.getElementById('search-results-count');
-    count.textContent = `${data.results.length} result${data.results.length !== 1 ? 's' : ''} for "${this._escapeHtml(data.query)}"`;
-    list.innerHTML = data.results.length === 0
+    const results = (data.results || []).filter(r => !(this.blockedUserIds || []).includes(r.user_id));
+    count.textContent = `${results.length} result${results.length !== 1 ? 's' : ''} for "${this._escapeHtml(data.query)}"`;
+    list.innerHTML = results.length === 0
       ? '<p class="muted-text" style="padding:12px">No results found</p>'
-      : data.results.map(r => `
+      : results.map(r => `
         <div class="search-result-item" data-msg-id="${r.id}">
           <span class="search-result-author" style="color:${this._getUserColor(r.username)}">${this._escapeHtml(this._getNickname(r.user_id, r.username))}</span>
           <span class="search-result-time">${this._formatTime(r.created_at)}</span>
