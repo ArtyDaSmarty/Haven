@@ -3880,9 +3880,31 @@ _renderServerBar() {
   if (announcementsBubble) announcementsBubble.classList.toggle('active', this.sidebarView === 'announcements');
   if (home) {
     home.classList.toggle('active', this.sidebarView !== 'dms' && this.sidebarView !== 'announcements' && !!main && this.currentServerId === main.id);
-    home.title = main ? `${main.name}` : 'Main';
+    const selectedServer = this._getCurrentServerMeta?.();
+    const useDefaultBranding = !selectedServer || selectedServer.name === 'Main' || selectedServer.is_legacy_main;
+    const homeName = useDefaultBranding
+      ? (this.serverSettings?.server_name || 'Sanctuary')
+      : (selectedServer.name || main?.name || 'Main');
+    const homeIcon = useDefaultBranding
+      ? (this.serverSettings?.server_icon || '')
+      : (selectedServer.icon_url || '');
+    home.title = homeName;
     const text = home.querySelector('.server-icon-text');
-    if (text) text.textContent = main?.name?.charAt(0)?.toUpperCase() || 'M';
+    if (text) text.textContent = homeName?.charAt(0)?.toUpperCase() || 'S';
+    let img = home.querySelector('img');
+    if (homeIcon) {
+      if (!img) {
+        img = document.createElement('img');
+        img.alt = homeName;
+        home.insertBefore(img, home.firstChild);
+      }
+      img.src = homeIcon;
+      img.style.display = '';
+      if (text) text.style.display = 'none';
+    } else {
+      if (img) img.style.display = 'none';
+      if (text) text.style.display = '';
+    }
     const badgeState = main ? this._getServerUnreadState(main.id) : { hasUnread: false, hasAnnouncement: false };
     let badge = home.querySelector('.server-unread-badge');
     if (!badge) {
