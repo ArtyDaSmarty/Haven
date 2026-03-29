@@ -141,6 +141,39 @@ function initDatabase() {
       PRIMARY KEY (user_id, key)
     );
 
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      blocked_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, blocked_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_mutes (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      muted_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, muted_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS server_bans (
+      server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      banned_by INTEGER NOT NULL REFERENCES users(id),
+      reason TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (server_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS server_mutes (
+      server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      muted_by INTEGER NOT NULL REFERENCES users(id),
+      reason TEXT DEFAULT '',
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (server_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS eula_acceptances (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -160,6 +193,16 @@ function initDatabase() {
       ON bans(user_id);
     CREATE INDEX IF NOT EXISTS idx_mutes_user
       ON mutes(user_id, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_user
+      ON user_blocks(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked
+      ON user_blocks(blocked_user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_mutes_user
+      ON user_mutes(user_id);
+    CREATE INDEX IF NOT EXISTS idx_server_bans_server
+      ON server_bans(server_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_server_mutes_server
+      ON server_mutes(server_id, user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_messages_channel_id
       ON messages(channel_id, id DESC);
   `);
@@ -250,6 +293,7 @@ function initDatabase() {
   insertSetting.run('server_icon', '');                // path to uploaded server icon image
   insertSetting.run('permission_thresholds', '{"create_channel":50}');    // JSON: { permission: minLevel } — auto-grant perms at level
   insertSetting.run('server_code', '');                // server-wide invite code (joins all channels)
+  insertSetting.run('display_version', '2.0');         // displayed version in client UI
   insertSetting.run('max_upload_mb', '25');             // max file upload size in MB
   insertSetting.run('max_poll_options', '10');            // max poll answer options (2–25)
   insertSetting.run('max_sound_kb', '1024');              // max soundboard file size in KB (256–10240)
