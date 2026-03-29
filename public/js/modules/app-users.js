@@ -904,6 +904,7 @@ _loadProxySettings() {
     this._proxySettings.list = Array.isArray(res.proxies) ? res.proxies : [];
     this._proxySettings.loaded = true;
     this._renderProxySettings();
+    this._renderProxyManagerList();
   });
 },
 
@@ -911,6 +912,28 @@ _renderProxySettings() {
   const listEl = document.getElementById('proxy-settings-list');
   if (!listEl) return;
   const proxies = Array.isArray(this._proxySettings.list) ? this._proxySettings.list : [];
+  const statusEl = document.getElementById('proxy-settings-status');
+  if (!proxies.length) {
+    listEl.innerHTML = '<p class="muted-text">No proxies yet. Create one to start proxying with triggers like <code>stoat: hello</code>.</p>';
+    if (statusEl) statusEl.textContent = '';
+    return;
+  }
+  const alterCount = proxies.filter(proxy => (proxy.proxyType || 'alter') !== 'character').length;
+  const characterCount = proxies.filter(proxy => proxy.proxyType === 'character').length;
+  listEl.innerHTML = `
+    <div class="proxy-settings-item">
+      <div class="proxy-settings-summary">
+        <div class="proxy-settings-copy">
+          <div class="proxy-settings-name-row">
+            <strong>${proxies.length} ${proxies.length === 1 ? 'proxy' : 'proxies'}</strong>
+          </div>
+          <div class="proxy-settings-meta">${alterCount} ALTER • ${characterCount} CHARACTER</div>
+        </div>
+      </div>
+    </div>
+  `;
+  if (statusEl) statusEl.textContent = `${proxies.length} saved`;
+  return;
   if (!proxies.length) {
     listEl.innerHTML = '<p class="muted-text">No proxies yet. Create one to start proxying with triggers like <code>stoat: hello</code>.</p>';
   } else {
@@ -962,6 +985,69 @@ _renderProxySettings() {
   });
 },
 
+_renderProxyManagerList() {
+  const listEl = document.getElementById('proxy-manager-list');
+  if (!listEl) return;
+  const proxies = Array.isArray(this._proxySettings.list) ? this._proxySettings.list : [];
+  if (!proxies.length) {
+    listEl.innerHTML = '<p class="muted-text">No proxies yet. Create one from Settings to get started.</p>';
+    return;
+  }
+  listEl.innerHTML = proxies.map(proxy => `
+    <div class="proxy-settings-item" data-proxy-id="${proxy.id}">
+      <div class="proxy-settings-summary">
+        <div class="proxy-settings-avatar">
+          ${proxy.avatarUrl ? `<img src="${this._escapeHtml(proxy.avatarUrl)}" alt="${this._escapeHtml(proxy.name)}">` : `<div class="proxy-settings-avatar-fallback">${this._escapeHtml((proxy.name || '?').charAt(0).toUpperCase())}</div>`}
+        </div>
+        <div class="proxy-settings-copy">
+          <div class="proxy-settings-name-row">
+            <strong>${this._escapeHtml(proxy.name)}</strong>
+            <span class="proxy-visibility-badge">${proxy.proxyType === 'character' ? 'CHARACTER' : 'ALTER'}</span>
+            <span class="proxy-visibility-badge">${proxy.isPublic ? 'Public' : 'Private'}</span>
+          </div>
+          <div class="proxy-settings-trigger"><code>${this._escapeHtml(proxy.triggerPrefix)}message${this._escapeHtml(proxy.triggerSuffix || '')}</code></div>
+          <div class="proxy-settings-meta">${this._escapeHtml(proxy.groupName || 'Ungrouped')}${proxy.bio ? ` • ${this._escapeHtml(proxy.bio)}` : ''}</div>
+        </div>
+      </div>
+      <div class="proxy-settings-actions">
+        <button class="btn-sm proxy-edit-btn" data-proxy-id="${proxy.id}">Edit</button>
+        <button class="btn-sm proxy-delete-btn" data-proxy-id="${proxy.id}">Delete</button>
+      </div>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.proxy-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const proxy = this._proxySettings.list.find(p => p.id === parseInt(btn.dataset.proxyId, 10));
+      if (proxy) this._openProxyEditor(proxy);
+    });
+  });
+  listEl.querySelectorAll('.proxy-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const proxyId = parseInt(btn.dataset.proxyId, 10);
+      const proxy = this._proxySettings.list.find(p => p.id === proxyId);
+      if (!proxy) return;
+      if (!confirm(`Delete proxy "${proxy.name}"?`)) return;
+      this.socket.emit('delete-proxy', { id: proxyId }, (res) => {
+        if (!res) return;
+        if (res.error) return this._showToast(res.error, 'error');
+        this._proxySettings.list = res.proxies || [];
+        this._renderProxySettings();
+        this._renderProxyManagerList();
+        this._resetProxyEditor();
+        this._showToast('Proxy deleted', 'success');
+      });
+    });
+  });
+},
+
+_openProxyManagerModal() {
+  if (!this._proxySettings.loaded) this._loadProxySettings();
+  this._renderProxyManagerList();
+  const modal = document.getElementById('proxy-manager-modal');
+  if (modal) modal.style.display = 'flex';
+},
+
 _openProxyEditor(proxy = null) {
   const editor = document.getElementById('proxy-editor');
   if (!editor) return;
@@ -1011,6 +1097,8 @@ _openProxyEditor(proxy = null) {
   const suffixInput = document.getElementById('proxy-suffix-input');
   if (prefixInput) prefixInput.oninput = updatePreview;
   if (suffixInput) suffixInput.oninput = updatePreview;
+  const managerModal = document.getElementById('proxy-manager-modal');
+  if (managerModal) managerModal.style.display = 'none';
   editor.style.display = 'block';
 },
 
@@ -1038,6 +1126,7 @@ _saveProxyDraft() {
     if (res.error) return this._showToast(res.error, 'error');
     this._proxySettings.list = res.proxies || [];
     this._renderProxySettings();
+    this._renderProxyManagerList();
     this._resetProxyEditor();
     this._showToast('Proxy saved', 'success');
   });

@@ -82,7 +82,8 @@ async switchChannel(code) {
   const msgInputArea = document.getElementById('message-input-area');
   const _textOff = channel && channel.text_enabled === 0;
   const _mediaOff = channel && channel.media_enabled === 0;
-  const _readOnlyAnnouncements = !!(isAnnouncementHub && !this.user?.isAdmin);
+  const _canPostAnnouncements = !!(this.user?.isAdmin || this._hasPerm('manage_server') || this._hasPerm('create_channel'));
+  const _readOnlyAnnouncements = !!(isAnnouncementHub && !_canPostAnnouncements);
   if (msgInputArea) msgInputArea.style.display = ((_textOff && _mediaOff) || _readOnlyAnnouncements) ? 'none' : '';
   // Text-only elements
   const _msgInput = document.getElementById('message-input');
@@ -116,6 +117,7 @@ async switchChannel(code) {
   if (activeEl) activeEl.classList.add('active');
 
   this.unreadCounts[code] = 0;
+  if (channel) channel.unreadCount = 0;
   this._updateBadge(code);
 
   document.getElementById('status-channel').textContent = isDm && channel.dm_target

@@ -303,14 +303,15 @@ _setupSocketListeners() {
     }
 
     this.channels = channels;
-    // Seed client-side unreadCounts from server-reported values so the
-    // desktop badge, tab title, and DM section badge stay in sync.
-    // Only import counts for channels we haven't touched yet this session.
+    // Keep client-side unreadCounts fully aligned with server-reported values
+    // so badges clear correctly after everything has been read.
+    const validCodes = new Set(channels.map(ch => ch.code));
     for (const ch of channels) {
-      if (!(ch.code in this.unreadCounts) && ch.unreadCount > 0) {
-        this.unreadCounts[ch.code] = ch.unreadCount;
-      }
+      this.unreadCounts[ch.code] = ch.unreadCount > 0 ? ch.unreadCount : 0;
     }
+    Object.keys(this.unreadCounts).forEach((code) => {
+      if (!validCodes.has(code)) delete this.unreadCounts[code];
+    });
     this._renderChannels();
     // Push accurate totals to the desktop shell / tab title immediately
     this._updateTabTitle();
