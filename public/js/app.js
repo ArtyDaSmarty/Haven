@@ -230,7 +230,8 @@ class HavenApp {
     const loginEl = document.getElementById('login-name');
     if (loginEl) loginEl.textContent = `@${this.user.username}`;
 
-    document.getElementById('admin-controls')?.remove();
+    const oldCreatePanel = document.getElementById('admin-controls');
+    if (oldCreatePanel) oldCreatePanel.style.display = 'none';
     if (this.user.isAdmin || this._hasPerm('manage_roles') || this._hasPerm('manage_server')) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     }
