@@ -592,7 +592,7 @@ function setupSocketHandlers(io, db) {
   function getVisibleServers(userId, isAdmin) {
     if (isAdmin) {
       return db.prepare(`
-        SELECT s.id, s.name, s.code, s.icon_url, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
+        SELECT s.id, s.name, s.code, s.icon_url, s.home_channel_id, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
                (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
         FROM servers s
         ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
@@ -600,7 +600,7 @@ function setupSocketHandlers(io, db) {
     }
 
     return db.prepare(`
-      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
+      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.home_channel_id, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
              (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
       FROM servers s
       JOIN channels c ON c.server_id = s.id AND c.is_dm = 0
@@ -1226,6 +1226,7 @@ function setupSocketHandlers(io, db) {
         const channelResult = db.prepare(
           'INSERT INTO channels (name, code, server_id, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, 0, NULL, ?, 1, 1, 1)'
         ).run('general', generalCode, serverId, socket.user.id, 'standard');
+        db.prepare('UPDATE servers SET home_channel_id = ? WHERE id = ?').run(channelResult.lastInsertRowid, serverId);
         db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(channelResult.lastInsertRowid, socket.user.id);
 
         broadcastChannelLists();
@@ -1250,10 +1251,15 @@ function setupSocketHandlers(io, db) {
       const iconUrl = typeof data.iconUrl === 'string' ? data.iconUrl.trim() : '';
       const theme = typeof data.theme === 'string' ? data.theme.trim() : '';
       const themeForceOverride = data.themeForceOverride ? 1 : 0;
+      const homeChannelId = Number.isInteger(Number(data.homeChannelId)) && Number(data.homeChannelId) > 0 ? Number(data.homeChannelId) : null;
       if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
+      if (homeChannelId) {
+        const homeChannel = db.prepare('SELECT id FROM channels WHERE id = ? AND server_id = ? AND is_dm = 0 AND special_section IS NULL').get(homeChannelId, serverId);
+        if (!homeChannel) return cb({ error: 'Invalid home channel' });
+      }
 
       try {
-        db.prepare('UPDATE servers SET name = ?, icon_url = ?, theme = ?, theme_force_override = ? WHERE id = ?').run(name, iconUrl, theme, themeForceOverride, serverId);
+        db.prepare('UPDATE servers SET name = ?, icon_url = ?, theme = ?, theme_force_override = ?, home_channel_id = ? WHERE id = ?').run(name, iconUrl, theme, themeForceOverride, homeChannelId, serverId);
         emitServersList(socket);
         broadcastChannelLists();
         cb({ ok: true });
@@ -1335,8 +1341,8 @@ function setupSocketHandlers(io, db) {
           isPrivate,
           expiresAt,
           channelType,
-          channelType === 'forum' ? 0 : 1,
-          channelType === 'forum' ? 0 : 1,
+          1,
+          1,
           channelType === 'forum' ? 0 : 1
         );
 
@@ -1371,8 +1377,8 @@ function setupSocketHandlers(io, db) {
           is_private: isPrivate,
           expires_at: expiresAt,
           channel_type: channelType,
-          text_enabled: channelType === 'forum' ? 0 : 1,
-          media_enabled: channelType === 'forum' ? 0 : 1,
+          text_enabled: 1,
+          media_enabled: 1,
           voice_enabled: channelType === 'forum' ? 0 : 1
         };
 
@@ -1398,35 +1404,18 @@ function setupSocketHandlers(io, db) {
         if (!socket.user.isAdmin && isServerBanned(socket.user.id, serverInvite.id)) {
           return socket.emit('error-msg', 'You are banned from that server');
         }
-        // Server code: add user to all top-level non-private channels in that server
-        const allParents = db.prepare(
-          'SELECT id, code FROM channels WHERE server_id = ? AND parent_channel_id IS NULL AND is_dm = 0 AND is_private = 0'
-        ).all(serverInvite.id);
-        const insertMember = db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)');
-        let joinedCount = 0;
-        let firstCode = null;
-
-        const txn = db.transaction(() => {
-          for (const parent of allParents) {
-            insertMember.run(parent.id, socket.user.id);
-            socket.join(`channel:${parent.code}`);
-            joinedCount++;
-            if (!firstCode) firstCode = parent.code;
-            // Also add to non-private sub-channels
-            const subs = db.prepare('SELECT id, code FROM channels WHERE parent_channel_id = ? AND is_private = 0').all(parent.id);
-            for (const sub of subs) {
-              insertMember.run(sub.id, socket.user.id);
-              socket.join(`channel:${sub.code}`);
-              joinedCount++;
-            }
-          }
-        });
-        txn();
+        const homeChannel = (serverInvite.home_channel_id
+          ? db.prepare('SELECT id, code FROM channels WHERE id = ? AND server_id = ? AND is_dm = 0 AND special_section IS NULL').get(serverInvite.home_channel_id, serverInvite.id)
+          : null)
+          || db.prepare('SELECT id, code FROM channels WHERE server_id = ? AND parent_channel_id IS NULL AND is_dm = 0 AND special_section IS NULL ORDER BY position, id LIMIT 1').get(serverInvite.id);
+        if (!homeChannel) return socket.emit('error-msg', 'This server does not have a home channel yet');
+        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(homeChannel.id, socket.user.id);
+        socket.join(`channel:${homeChannel.code}`);
 
         emitServersList(socket);
         socket.emit('channels-list', getEnrichedChannels(socket.user.id, socket.user.isAdmin, (room) => socket.join(room)));
-        socket.emit('server-joined', { serverId: serverInvite.id, firstChannelCode: firstCode });
-        socket.emit('error-msg', `${serverInvite.name} joined — added ${joinedCount} channel${joinedCount !== 1 ? 's' : ''}`);
+        socket.emit('server-joined', { serverId: serverInvite.id, firstChannelCode: homeChannel.code });
+        socket.emit('error-msg', `${serverInvite.name} joined`);
         return;
       }
 
@@ -1868,8 +1857,11 @@ function setupSocketHandlers(io, db) {
           return socket.emit('error-msg', 'You cannot message this user');
         }
       }
-      if (channel.special_section === 'announcements' && !socket.user.isAdmin) {
-        return socket.emit('error-msg', 'Only the instance admin can post in Admin Announcements');
+      if (channel.special_section === 'announcements'
+        && !socket.user.isAdmin
+        && !userHasServerPermission(socket.user.id, 'manage_server', channel.server_id)
+        && !userHasPermission(socket.user.id, 'create_channel', channel.id)) {
+        return socket.emit('error-msg', 'You do not have permission to post in Admin Announcements');
       }
 
       // Block text messages when text is disabled (allow media uploads if media is enabled)
@@ -6801,8 +6793,12 @@ function setupSocketHandlers(io, db) {
         db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(channel.id);
         db.prepare('DELETE FROM channels WHERE id = ?').run(channel.id);
 
-        // Broadcast enriched channel list
-        broadcastChannelLists();
+        // Immediate refresh so the deleted sub-channel disappears right away
+        for (const [, s] of io.sockets.sockets) {
+          if (!s.user) continue;
+          s.leave(`channel:${code}`);
+          s.emit('channels-list', getEnrichedChannels(s.user.id, s.user.isAdmin, null));
+        }
 
         socket.emit('error-msg', `Sub-channel deleted`);
       } catch (err) {
