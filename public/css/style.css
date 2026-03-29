@@ -12039,6 +12039,21 @@ ul.chat-list { list-style-type: disc; }
   overflow-y: auto;
 }
 
+.sidebar-split.dm-hidden .channel-section {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sidebar-split.dm-hidden .channel-section .channel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sidebar-split.dm-hidden .dm-section-pane,
+.sidebar-split.dm-hidden .sidebar-split-handle {
+  display: none !important;
+}
+
 /* Collapsible channels header */
 .channels-toggle {
   display: flex;
