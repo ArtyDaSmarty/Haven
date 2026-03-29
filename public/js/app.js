@@ -230,13 +230,11 @@ class HavenApp {
     const loginEl = document.getElementById('login-name');
     if (loginEl) loginEl.textContent = `@${this.user.username}`;
 
-    if (this.user.isAdmin || this._hasPerm('create_channel')) {
-      document.getElementById('admin-controls').style.display = 'block';
-    }
+    document.getElementById('admin-controls')?.remove();
     if (this.user.isAdmin || this._hasPerm('manage_roles') || this._hasPerm('manage_server')) {
       document.getElementById('admin-mod-panel').style.display = 'block';
     }
-    if (this.user.isAdmin) {
+    if (this.user.isAdmin || this._hasPerm('create_channel') || this._hasPerm('manage_sub_channels')) {
       const organizeBtn = document.getElementById('organize-channels-btn');
       if (organizeBtn) organizeBtn.style.display = '';
     }
