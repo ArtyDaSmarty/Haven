@@ -1749,12 +1749,18 @@ _setupUI() {
     const scrubMessages = document.getElementById('admin-scrub-checkbox').checked;
     const scrubScope = document.getElementById('admin-scrub-scope').value;
 
-    if (action === 'kick') {
+    if (action === 'kick' || action === 'admin-kick') {
       this.socket.emit('kick-user', { userId, reason, scrubMessages, scrubScope });
-    } else if (action === 'ban') {
+    } else if (action === 'ban' || action === 'admin-ban') {
       this.socket.emit('ban-user', { userId, reason, scrubMessages });
-    } else if (action === 'mute') {
+    } else if (action === 'mute' || action === 'admin-mute') {
       this.socket.emit('mute-user', { userId, reason, duration });
+    } else if (action === 'server-kick') {
+      this.socket.emit('server-kick-user', { userId, reason, serverId: this.currentServerId });
+    } else if (action === 'server-ban') {
+      this.socket.emit('server-ban-user', { userId, reason, serverId: this.currentServerId });
+    } else if (action === 'server-mute') {
+      this.socket.emit('server-mute-user', { userId, reason, duration, serverId: this.currentServerId });
     } else if (action === 'delete-user') {
       if (!confirm(`Are you SURE you want to delete ${this.adminActionTarget.username}? This cannot be undone.`)) return;
       this.socket.emit('delete-user', { userId, reason, scrubMessages });
@@ -3593,13 +3599,21 @@ _getAnnouncementChannel() {
 
 _applyThemePreferenceStack() {
   const selectedServer = this._getCurrentServerMeta?.();
-  if (selectedServer?.theme && selectedServer?.theme_force_override) {
+  const viewingSelectedServer = this.sidebarView !== 'dms' && this.sidebarView !== 'announcements';
+  if (viewingSelectedServer && selectedServer?.theme && selectedServer?.theme_force_override) {
     applyThemeFromServer(selectedServer.theme);
     return;
   }
   const hasUserOverride = localStorage.getItem('haven_user_theme_override') === '1' || !!this.preferences?.theme;
-  if (hasUserOverride) return;
-  if (selectedServer?.theme) {
+  if (this.preferences?.theme) {
+    applyThemeFromServer(this.preferences.theme);
+    return;
+  }
+  if (hasUserOverride && localStorage.getItem('haven_theme')) {
+    applyThemeFromServer(localStorage.getItem('haven_theme'));
+    return;
+  }
+  if (viewingSelectedServer && selectedServer?.theme) {
     applyThemeFromServer(selectedServer.theme);
     return;
   }
@@ -3620,6 +3634,7 @@ _selectServer(serverId) {
   this._renderServerBar();
   this._renderChannels();
   this._refreshSelectedServerSettings();
+  if (typeof this._applyServerBranding === 'function') this._applyServerBranding();
   this._applyThemePreferenceStack();
 },
 
@@ -3668,6 +3683,7 @@ _setupServerBar() {
     if (firstDm) this.switchChannel(firstDm.code);
     this._renderServerBar();
     this._renderChannels();
+    this._applyThemePreferenceStack();
   });
   document.getElementById('announcements-server-bubble')?.addEventListener('click', () => {
     this.sidebarView = 'announcements';
@@ -3675,6 +3691,7 @@ _setupServerBar() {
     if (channel) this.switchChannel(channel.code);
     this._renderServerBar();
     this._renderChannels();
+    this._applyThemePreferenceStack();
   });
 
   document.getElementById('home-server')?.addEventListener('click', () => {
@@ -3750,7 +3767,9 @@ _renderManageServersList() {
   const container = document.getElementById('manage-servers-list');
   if (!container) return;
   container.innerHTML = '';
-  (this.servers || []).forEach((s) => {
+  const orderedServers = this._sortServersForUser(this.servers || []);
+  const canEditServers = !!(this.user?.isAdmin || this._hasPerm('create_server'));
+  orderedServers.forEach((s, index) => {
     const row = document.createElement('div');
     row.className = 'manage-server-row';
     row.innerHTML = `
@@ -3761,11 +3780,27 @@ _renderManageServersList() {
       </div>
       <span class="manage-server-status online">${s.channel_count || 0} channels</span>
       <div class="manage-server-actions">
+        <button class="manage-server-move-up" title="Move up"${index === 0 ? ' disabled' : ''}>↑</button>
+        <button class="manage-server-move-down" title="Move down"${index === orderedServers.length - 1 ? ' disabled' : ''}>↓</button>
         <button class="manage-server-visit" title="Open server">↗</button>
-        <button class="manage-server-edit" title="Edit server">✏️</button>
-        ${s.name === 'Main' ? '' : '<button class="manage-server-delete danger-action" title="Delete server">🗑️</button>'}
+        ${canEditServers ? '<button class="manage-server-edit" title="Edit server">✏️</button>' : ''}
+        ${canEditServers && s.name !== 'Main' ? '<button class="manage-server-delete danger-action" title="Delete server">🗑️</button>' : ''}
       </div>
     `;
+    row.querySelector('.manage-server-move-up')?.addEventListener('click', () => {
+      const next = [...orderedServers];
+      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+      this._setLocalServerOrder(next.map(server => server.id));
+      this._renderServerBar();
+      this._renderManageServersList();
+    });
+    row.querySelector('.manage-server-move-down')?.addEventListener('click', () => {
+      const next = [...orderedServers];
+      [next[index], next[index + 1]] = [next[index + 1], next[index]];
+      this._setLocalServerOrder(next.map(server => server.id));
+      this._renderServerBar();
+      this._renderManageServersList();
+    });
     row.querySelector('.manage-server-visit')?.addEventListener('click', () => {
       this._selectServer(s.id);
       document.getElementById('manage-servers-modal').style.display = 'none';
@@ -3787,6 +3822,46 @@ _renderManageServersList() {
   });
 },
 
+_getLocalServerOrder() {
+  const key = `haven_server_order_${this.user?.id || 'guest'}`;
+  try {
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  } catch {
+    return [];
+  }
+},
+
+_setLocalServerOrder(order) {
+  const key = `haven_server_order_${this.user?.id || 'guest'}`;
+  localStorage.setItem(key, JSON.stringify(order));
+},
+
+_sortServersForUser(servers) {
+  const order = this._getLocalServerOrder();
+  const rank = new Map(order.map((id, idx) => [id, idx]));
+  return [...(servers || [])].sort((a, b) => {
+    const aRank = rank.has(a.id) ? rank.get(a.id) : Number.MAX_SAFE_INTEGER;
+    const bRank = rank.has(b.id) ? rank.get(b.id) : Number.MAX_SAFE_INTEGER;
+    if (aRank !== bRank) return aRank - bRank;
+    if ((a.name === 'Main') !== (b.name === 'Main')) return a.name === 'Main' ? -1 : 1;
+    return (a.position || 0) - (b.position || 0) || (a.name || '').localeCompare(b.name || '');
+  });
+},
+
+_getServerUnreadState(serverId) {
+  const serverChannels = (this.channels || []).filter(c => !c.is_dm && c.server_id === serverId);
+  let hasUnread = false;
+  let hasAnnouncement = false;
+  serverChannels.forEach((channel) => {
+    const unread = this.unreadCounts?.[channel.code] || channel.unreadCount || 0;
+    if (unread > 0) {
+      hasUnread = true;
+      if (channel.notification_type === 'announcement') hasAnnouncement = true;
+    }
+  });
+  return { hasUnread, hasAnnouncement };
+},
+
 _updateServerBadgeDots() {},
 
 _renderServerBar() {
@@ -3795,8 +3870,9 @@ _renderServerBar() {
   const canCreateServer = !!(this.user?.isAdmin || this._hasPerm('create_server'));
   const addBtn = document.getElementById('add-server-btn');
   if (addBtn) addBtn.style.display = canCreateServer ? '' : 'none';
-  const servers = (this.servers || []).filter(s => s.name !== 'Main');
-  const main = (this.servers || []).find(s => s.name === 'Main') || this.servers?.[0];
+  const orderedServers = this._sortServersForUser(this.servers || []);
+  const servers = orderedServers.filter(s => s.name !== 'Main');
+  const main = orderedServers.find(s => s.name === 'Main') || orderedServers[0];
   const home = document.getElementById('home-server');
   const dmBubble = document.getElementById('dm-server-bubble');
   const announcementsBubble = document.getElementById('announcements-server-bubble');
@@ -3807,13 +3883,25 @@ _renderServerBar() {
     home.title = main ? `${main.name}` : 'Main';
     const text = home.querySelector('.server-icon-text');
     if (text) text.textContent = main?.name?.charAt(0)?.toUpperCase() || 'M';
+    const badgeState = main ? this._getServerUnreadState(main.id) : { hasUnread: false, hasAnnouncement: false };
+    let badge = home.querySelector('.server-unread-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'server-unread-badge';
+      badge.style.cssText = 'display:none;position:absolute;top:-4px;right:-4px;min-width:12px;height:12px;border-radius:999px;background:#ff5d73;box-shadow:0 0 0 2px var(--bg-primary);';
+      home.appendChild(badge);
+    }
+    badge.style.display = badgeState.hasUnread ? '' : 'none';
+    badge.style.background = badgeState.hasAnnouncement ? '#8b5cf6' : '#ff5d73';
   }
 
   list.innerHTML = servers.map((s) => {
     const active = this.currentServerId === s.id ? ' active' : '';
     const initial = this._escapeHtml((s.name || '?')[0].toUpperCase());
+    const badgeState = this._getServerUnreadState(s.id);
     return `<div class="server-icon remote${active}" data-server-id="${s.id}" title="${this._escapeHtml(s.name)}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" class="server-icon-img" alt=""><span class="server-icon-text" style="display:none">${initial}</span>` : `<span class="server-icon-text">${initial}</span>`}
+      <span class="server-unread-badge" style="${badgeState.hasUnread ? '' : 'display:none;'}position:absolute;top:-4px;right:-4px;min-width:12px;height:12px;border-radius:999px;background:${badgeState.hasAnnouncement ? '#8b5cf6' : '#ff5d73'};box-shadow:0 0 0 2px var(--bg-primary);"></span>
     </div>`;
   }).join('');
 
@@ -3826,7 +3914,7 @@ _renderServerBar() {
 _renderMobileServerList() {
   const list = document.getElementById('mobile-server-list');
   if (!list) return;
-  list.innerHTML = (this.servers || []).map((s) => `
+  list.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-server-item" data-server-id="${s.id}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" class="msrv-icon" alt="">` : `<span class="msrv-initial">${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
       <span>${this._escapeHtml(s.name)}</span>
@@ -3840,7 +3928,7 @@ _renderMobileServerList() {
 _renderMobileSidebarServers() {
   const scroll = document.getElementById('mobile-servers-scroll');
   if (!scroll) return;
-  scroll.innerHTML = (this.servers || []).map((s) => `
+  scroll.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-srv-bubble${this.currentServerId === s.id ? ' active' : ''}" data-server-id="${s.id}" title="${this._escapeHtml(s.name)}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" alt="${this._escapeHtml(s.name)}" class="mobile-srv-icon-img">` : `<span>${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
     </button>
@@ -4000,6 +4088,7 @@ _prepareSettingsLayout() {
       <div id="server-channels-settings-slot" style="margin-top:8px;"></div>
       <button class="btn-sm btn-full" id="server-organize-channels-btn" style="margin-top:8px">Open Channel Organizer</button>
     `;
+    settingsBody.insertBefore(serverChannelsSection, adminPanel || null);
   } else if (serverChannelsSection) {
     serverChannelsSection.className = 'settings-section';
     serverChannelsSection.style.cssText = '';
@@ -4012,6 +4101,7 @@ _prepareSettingsLayout() {
       createBody.classList.remove('collapsed');
       createBody.style.maxHeight = '';
       createBody.style.opacity = '';
+      createBody.style.display = 'block';
       createBody.style.marginTop = '';
       createBody.style.marginBottom = '';
       slot.replaceChildren(createBody);
