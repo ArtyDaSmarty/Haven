@@ -880,7 +880,12 @@ app.get('/api/health', (req, res) => {
 // ── Version endpoint (for update checker — authenticated users only) ──
 app.get('/api/version', (req, res) => {
   const pkg = require('./package.json');
-  res.json({ version: pkg.version });
+  try {
+    const row = getDb().prepare("SELECT value FROM server_settings WHERE key = 'display_version'").get();
+    res.json({ version: row?.value || pkg.version });
+  } catch {
+    res.json({ version: pkg.version });
+  }
 });
 
 // ── Public config (unauthenticated — safe, read-only aesthetics) ──
