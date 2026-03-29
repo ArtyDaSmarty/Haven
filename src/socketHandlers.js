@@ -645,7 +645,7 @@ function setupSocketHandlers(io, db) {
   function getServerMute(userId, serverId) {
     if (!serverId) return null;
     return db.prepare(
-      "SELECT id, expires_at FROM server_mutes WHERE server_id = ? AND user_id = ? AND expires_at > datetime('now') ORDER BY expires_at DESC LIMIT 1"
+      "SELECT expires_at FROM server_mutes WHERE server_id = ? AND user_id = ? AND expires_at > datetime('now') ORDER BY expires_at DESC LIMIT 1"
     ).get(serverId, userId);
   }
 
