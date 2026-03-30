@@ -13,6 +13,18 @@ async switchChannel(code) {
   this.currentChannel = code;
   this._coupledToBottom = true;
   const channel = this.channels.find(c => c.code === code);
+  const parentChannel = channel?.parent_channel_id ? this.channels.find(c => c.id === channel.parent_channel_id) : null;
+  const effectiveServerId = channel?.server_id || parentChannel?.server_id || null;
+  if (channel) {
+    if (channel.is_dm) {
+      this.sidebarView = 'dms';
+    } else if (channel.special_section === 'announcements') {
+      this.sidebarView = 'announcements';
+    } else {
+      this.sidebarView = 'servers';
+      if (effectiveServerId) this.currentServerId = effectiveServerId;
+    }
+  }
   const isDm = channel && channel.is_dm;
   const isAnnouncementHub = channel && channel.special_section === 'announcements';
   const isForum = channel && channel.channel_type === 'forum';
@@ -115,6 +127,12 @@ async switchChannel(code) {
   document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
   const activeEl = document.querySelector(`.channel-item[data-code="${code}"]`);
   if (activeEl) activeEl.classList.add('active');
+
+  this._renderServerBar?.();
+  this._renderChannels?.();
+  this._refreshSelectedServerSettings?.();
+  this._applyServerBranding?.();
+  this._applyThemePreferenceStack?.();
 
   this.unreadCounts[code] = 0;
   if (channel) channel.unreadCount = 0;
@@ -1349,7 +1367,9 @@ _renderChannels() {
 
   if (this.currentChannel) {
     const current = this.channels.find(c => c.code === this.currentChannel);
-    if (current && !showingDms && !showingAnnouncements && !current.is_dm && !current.special_section && current.server_id !== this.currentServerId) {
+    const currentParent = current?.parent_channel_id ? this.channels.find(c => c.id === current.parent_channel_id) : null;
+    const effectiveCurrentServerId = current?.server_id || currentParent?.server_id || null;
+    if (current && !showingDms && !showingAnnouncements && !current.is_dm && !current.special_section && effectiveCurrentServerId !== this.currentServerId) {
       const fallback = regularChannels[0];
       if (fallback) {
         this.currentChannel = fallback.code;
