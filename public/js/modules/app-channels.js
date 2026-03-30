@@ -13,6 +13,16 @@ async switchChannel(code) {
   this.currentChannel = code;
   this._coupledToBottom = true;
   const channel = this.channels.find(c => c.code === code);
+  if (channel) {
+    if (channel.is_dm) {
+      this.sidebarView = 'dms';
+    } else if (channel.special_section === 'announcements') {
+      this.sidebarView = 'announcements';
+    } else {
+      this.sidebarView = 'servers';
+      if (channel.server_id) this.currentServerId = channel.server_id;
+    }
+  }
   const isDm = channel && channel.is_dm;
   const isAnnouncementHub = channel && channel.special_section === 'announcements';
   const isForum = channel && channel.channel_type === 'forum';
@@ -115,6 +125,12 @@ async switchChannel(code) {
   document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
   const activeEl = document.querySelector(`.channel-item[data-code="${code}"]`);
   if (activeEl) activeEl.classList.add('active');
+
+  this._renderServerBar?.();
+  this._renderChannels?.();
+  this._refreshSelectedServerSettings?.();
+  this._applyServerBranding?.();
+  this._applyThemePreferenceStack?.();
 
   this.unreadCounts[code] = 0;
   if (channel) channel.unreadCount = 0;
