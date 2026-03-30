@@ -13,8 +13,6 @@ async switchChannel(code) {
   this.currentChannel = code;
   this._coupledToBottom = true;
   const channel = this.channels.find(c => c.code === code);
-  const parentChannel = channel?.parent_channel_id ? this.channels.find(c => c.id === channel.parent_channel_id) : null;
-  const effectiveServerId = channel?.server_id || parentChannel?.server_id || null;
   if (channel) {
     if (channel.is_dm) {
       this.sidebarView = 'dms';
@@ -22,7 +20,7 @@ async switchChannel(code) {
       this.sidebarView = 'announcements';
     } else {
       this.sidebarView = 'servers';
-      if (effectiveServerId) this.currentServerId = effectiveServerId;
+      if (channel.server_id) this.currentServerId = channel.server_id;
     }
   }
   const isDm = channel && channel.is_dm;
