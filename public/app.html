@@ -264,7 +264,6 @@
           </div>
 
           <!-- Bottom bar -->
-          <div id="voice-bar" class="voice-bar" style="display:none"></div>
           <div class="sidebar-bottom-bar">
             <button id="theme-popup-toggle" class="sidebar-bottom-btn" title="Themes">🎨</button>
             <button class="sidebar-bottom-btn" id="activities-btn" title="Activities">🎮</button>
@@ -272,8 +271,6 @@
             <button id="mobile-settings-btn" class="sidebar-bottom-btn mobile-settings-btn" title="Settings">⚙️</button>
             <button id="donors-btn" class="sidebar-bottom-btn donate-btn">❤️</button>
             <span style="flex:1"></span>
-            <button id="voice-mute-btn" class="sidebar-bottom-btn voice-header-btn" title="Mute" style="display:none">🎙️</button>
-            <button id="voice-deafen-btn" class="sidebar-bottom-btn voice-header-btn" title="Deafen" style="display:none">🔊</button>
           </div>
         </div>
       </aside>
@@ -335,10 +332,9 @@
             <span class="android-beta-text">Android Beta</span>
             <button class="android-beta-dismiss" id="android-beta-dismiss" title="Dismiss">&times;</button>
           </div>
-          <!-- Spacer pushes voice controls to the right -->
+          <!-- Spacer pushes header controls to the right -->
           <div style="flex:1"></div>
-          <!-- Right-side: dynamic indicators, then voice (always furthest right) -->
-          <div class="voice-controls">
+          <div class="header-controls">
             <button id="mobile-users-btn" class="mobile-users-btn" title="Members" aria-label="Members">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -347,14 +343,6 @@
                 <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               </svg>
             </button>
-            <!-- Dynamic indicators (music, streams) inject here via JS -->
-            <button id="voice-join-btn" class="btn-voice" style="display:none">
-              🎤 Join Voice
-            </button>
-            <div id="voice-active-indicator" class="voice-active-indicator" style="display:none">
-              <span class="voice-indicator-icon">🎤</span>
-              <span class="voice-indicator-text">Voice Active</span>
-            </div>
           </div>
         </header>
 
@@ -410,54 +398,6 @@
 
         <!-- Chat Area -->
         <div id="message-area" class="message-area" style="display:none">
-          <!-- Webcam Grid -->
-          <div id="webcam-container" class="webcam-container" style="display:none">
-            <div class="webcam-header">
-              <span id="webcam-label">📷 Cameras</span>
-              <div class="webcam-header-controls">
-                <div class="webcam-layout-picker" id="webcam-layout-picker" title="Camera layout">
-                  <button class="stream-layout-btn" id="webcam-layout-btn" title="Change layout">⊞</button>
-                  <div class="stream-layout-menu" id="webcam-layout-menu">
-                    <button class="stream-layout-opt active" data-layout="auto" title="Auto grid">⊞ Auto</button>
-                    <button class="stream-layout-opt" data-layout="vertical" title="Vertical stack">▬ Stack</button>
-                    <button class="stream-layout-opt" data-layout="side-by-side" title="Side by side">◫ Side</button>
-                    <button class="stream-layout-opt" data-layout="grid-2x2" title="2×2 Grid">⊟ 2×2</button>
-                  </div>
-                </div>
-                <label class="stream-size-label" title="Camera display size">
-                  📷
-                  <input type="range" id="webcam-size-slider" class="stream-size-slider" min="15" max="70" value="25">
-                </label>
-                <button id="webcam-collapse-btn" class="icon-btn small" title="Minimize cameras">─</button>
-                <button id="webcam-close-btn" class="icon-btn small" title="Close cameras">✕</button>
-              </div>
-            </div>
-            <div id="webcam-grid" class="webcam-grid"></div>
-          </div>
-          <!-- Screen Share Viewer (multi-stream) -->
-          <div id="screen-share-container" class="screen-share-container" style="display:none">
-            <div class="screen-share-header">
-              <span id="screen-share-label">🖥️ Streams</span>
-              <div class="screen-share-header-controls">
-                <div class="stream-layout-picker" id="stream-layout-picker" title="Stream layout">
-                  <button class="stream-layout-btn" id="stream-layout-btn" title="Change layout">⊞</button>
-                  <div class="stream-layout-menu" id="stream-layout-menu">
-                    <button class="stream-layout-opt active" data-layout="auto" title="Auto grid">⊞ Auto</button>
-                    <button class="stream-layout-opt" data-layout="vertical" title="Vertical stack">▬ Stack</button>
-                    <button class="stream-layout-opt" data-layout="side-by-side" title="Side by side">◫ Side</button>
-                    <button class="stream-layout-opt" data-layout="grid-2x2" title="2×2 Grid">⊟ 2×2</button>
-                  </div>
-                </div>
-                <label class="stream-size-label" title="Stream display size">
-                  🖥️
-                  <input type="range" id="stream-size-slider" class="stream-size-slider" min="20" max="90" value="50">
-                </label>
-                <button id="screen-share-minimize" class="icon-btn small" title="Minimize streams">─</button>
-                <button id="screen-share-close" class="icon-btn small" title="Close streams">✕</button>
-              </div>
-            </div>
-            <div id="screen-share-grid" class="screen-share-grid"></div>
-          </div>
           <!-- Music Player Panel -->
           <div id="music-panel" class="music-panel" style="display:none">
             <div class="music-panel-header">
@@ -558,23 +498,6 @@
       <!-- ─── Right Sidebar ───────────────────────────── -->
       <aside class="right-sidebar" id="right-sidebar">
         <div class="right-sidebar-resize-handle" id="right-sidebar-resize-handle"></div>
-        <!-- Voice users section -->
-        <div class="right-sidebar-voice" id="right-sidebar-voice">
-          <div class="panel">
-            <div class="voice-panel-header">
-              <h5 class="panel-title" style="margin-bottom:0">🔊 Voice</h5>
-              <button id="mobile-right-close" class="mobile-panel-close mobile-panel-close-right" title="Close" aria-label="Close panel">&times;</button>
-              <div class="voice-header-actions">
-                <button id="voice-mute-btn-header" class="voice-header-btn" title="Mute" style="display:none">🎙️</button>
-                <button id="voice-deafen-btn-header" class="voice-header-btn" title="Deafen" style="display:none">🔊</button>
-              </div>
-            </div>
-            <button id="voice-join-mobile" class="btn-voice mobile-voice-join" style="display:none">🎤 Join Voice</button>
-            <div id="voice-users" class="user-list">
-              <p class="muted-text">No one in voice</p>
-            </div>
-          </div>
-        </div>
         <!-- Scrollable users section -->
         <div class="right-sidebar-users" id="right-sidebar-users">
           <div class="panel">
@@ -583,77 +506,6 @@
               <p class="muted-text">Select a channel</p>
             </div>
           </div>
-        </div>
-        <!-- Voice settings sub-panel (slides up above controls) -->
-        <div id="voice-settings-panel" class="voice-settings-panel" style="display:none">
-          <div class="voice-settings-section-label">🎧 Audio Devices</div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">Input</label>
-            <select id="voice-input-device" class="voice-settings-select">
-              <option value="">Default Microphone</option>
-            </select>
-          </div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">Output</label>
-            <select id="voice-output-device" class="voice-settings-select">
-              <option value="">Default Speaker</option>
-            </select>
-          </div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">Camera</label>
-            <select id="voice-cam-device" class="voice-settings-select">
-              <option value="">Default Camera</option>
-            </select>
-          </div>
-          <div class="voice-settings-divider"></div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">🤫 Noise Reduction</label>
-            <select id="voice-noise-mode" class="voice-settings-select" title="Off = no processing, Gate = silence below threshold, Suppress = AI noise removal (RNNoise)">
-              <option value="off">Off</option>
-              <option value="gate">Noise Gate</option>
-              <option value="suppress">Suppression (AI)</option>
-            </select>
-          </div>
-          <div class="voice-settings-row" id="noise-gate-row">
-            <label class="voice-settings-label" style="font-size:0.72rem;opacity:0.8">Gate Sensitivity</label>
-            <input type="range" id="voice-ns-slider" class="ns-slider" min="0" max="100" value="10" title="Noise gate: 0 = off, 100 = aggressive">
-          </div>
-          <div class="voice-settings-row mic-meter-row">
-            <label class="voice-settings-label">🎙️ Mic Level</label>
-            <div class="mic-meter" id="mic-level-meter">
-              <div class="mic-meter-fill" id="mic-meter-fill"></div>
-              <div class="mic-meter-threshold" id="mic-meter-threshold" title="Gate threshold"></div>
-            </div>
-          </div>
-          <div class="voice-settings-divider"></div>
-          <div class="voice-settings-section-label">🖥️ Screen Share Quality</div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">Resolution</label>
-            <select id="screen-res-select" class="voice-settings-select">
-              <option value="source">Source</option>
-              <option value="720">720p</option>
-              <option value="1080" selected>1080p</option>
-              <option value="1440">1440p</option>
-            </select>
-          </div>
-          <div class="voice-settings-row">
-            <label class="voice-settings-label">Frame Rate</label>
-            <select id="screen-fps-select" class="voice-settings-select">
-              <option value="15">15 fps</option>
-              <option value="30" selected>30 fps</option>
-              <option value="60">60 fps</option>
-            </select>
-          </div>
-        </div>
-        <!-- Voice controls bar (pinned above settings) -->
-        <div id="voice-panel" class="voice-panel" style="display:none">
-          <button id="voice-cam-btn" class="voice-panel-btn" title="Camera">📷</button>
-          <button id="screen-share-btn" class="voice-panel-btn" title="Share Screen">🖥️</button>
-          <button id="voice-soundboard-btn" class="voice-panel-btn" title="Soundboard">🎵</button>
-          <button id="voice-listen-together-btn" class="voice-panel-btn" title="Listen Together">🎶</button>
-          <span class="voice-panel-divider"></span>
-          <button id="voice-settings-toggle" class="voice-panel-btn" title="Voice Settings">⚙️</button>
-          <button id="voice-leave-sidebar-btn" class="voice-panel-btn voice-panel-leave" title="Leave Voice">✕</button>
         </div>
         <!-- Settings button pinned at bottom -->
         <div class="panel sidebar-settings-panel">
@@ -713,9 +565,6 @@
       <div id="online-overlay-list" class="online-overlay-list"></div>
     </div>
   </div>
-
-  <!-- Hidden audio container for voice streams -->
-  <div id="audio-container" style="display:none"></div>
 
   <!-- Toast notifications -->
   <div id="toast-container"></div>
@@ -1217,21 +1066,6 @@
             <span>Notifications</span>
             <input type="checkbox" id="notif-enabled" checked>
           </label>
-          <label class="toggle-row">
-            <span>Auto-accept Streams</span>
-            <input type="checkbox" id="auto-accept-streams" checked>
-          </label>
-          <small class="settings-hint" style="display:block;margin-bottom:6px">Automatically open screen shares when someone starts streaming. Turn off to join manually.</small>
-          <label class="toggle-row">
-            <span>Hide Voice Panel</span>
-            <input type="checkbox" id="hide-voice-panel">
-          </label>
-          <small class="settings-hint" style="display:block;margin-bottom:6px">Hide the voice users panel on desktop. Voice users are still shown in channel indicators.</small>
-          <label class="toggle-row">
-            <span>Sidebar Voice Controls</span>
-            <input type="checkbox" id="sidebar-voice-controls">
-          </label>
-          <small class="settings-hint" style="display:block;margin-bottom:6px">Show mute/deafen buttons in the sidebar instead of the voice panel header.</small>
           <label class="volume-row">
             <span>Volume</span>
             <input type="range" id="notif-volume" min="0" max="100" value="50" class="slider-sm">
@@ -2235,7 +2069,7 @@
   <div class="modal-overlay" id="music-modal" style="display:none">
     <div class="modal">
       <h3>🎵 Listen Together</h3>
-      <p class="modal-desc">Paste a link from Spotify, YouTube, or SoundCloud to share with everyone in voice</p>
+      <p class="modal-desc">Paste a link from Spotify, YouTube, or SoundCloud to share with everyone in the channel</p>
       <div class="form-group">
         <label>Music Link</label>
         <input type="text" id="music-link-input" placeholder="https://open.spotify.com/track/..." maxlength="500">
@@ -2299,8 +2133,6 @@
   <!-- Channel context menu (appears on "..." hover button) -->
   <div id="channel-ctx-menu" class="channel-ctx-menu" style="display:none">
     <button class="channel-ctx-item" data-action="mute">🔔 Mute Channel</button>
-    <button class="channel-ctx-item" data-action="join-voice">🎙️ Join Voice</button>
-    <button class="channel-ctx-item" data-action="leave-voice" style="display:none">📴 Disconnect Voice</button>
     <hr class="channel-ctx-sep">
     <button class="channel-ctx-item" data-action="leave-channel">🚪 Leave Channel</button>
     <hr class="channel-ctx-sep">
@@ -2312,19 +2144,11 @@
     <button class="channel-ctx-item admin-only" data-action="promote-channel" style="display:none">⬆️ Promote to Channel</button>
     <button class="channel-ctx-item admin-only" data-action="channel-functions">⚙️ Channel Functions <span class="cfn-arrow">▶</span></button>
     <div id="channel-functions-panel" class="channel-functions-panel" style="display:none">
-      <div class="cfn-row" data-fn="voice" title="Enable or disable voice chat in this channel">
-        <span class="cfn-label">🎙️ Voice</span>
-        <span class="cfn-badge cfn-on">ON</span>
-      </div>
       <div class="cfn-row" data-fn="text" title="Enable or disable text chat in this channel">
         <span class="cfn-label">💬 Text</span>
         <span class="cfn-badge cfn-on">ON</span>
       </div>
-      <div class="cfn-row" data-fn="streams" title="Allow screen sharing and camera (requires voice)">
-        <span class="cfn-label">🖥️ Streams</span>
-        <span class="cfn-badge cfn-on">ON</span>
-      </div>
-      <div class="cfn-row" data-fn="music" title="Allow Listen Together / music playback (requires voice)">
+      <div class="cfn-row" data-fn="music" title="Allow Listen Together / music playback in this channel">
         <span class="cfn-label">🎵 Music</span>
         <span class="cfn-badge cfn-on">ON</span>
       </div>
@@ -2340,14 +2164,6 @@
       <div class="cfn-row" data-fn="cleanup-exempt" title="Protect this channel from automatic message cleanup">
         <span class="cfn-label">🛡️ Cleanup Guard</span>
         <span class="cfn-badge cfn-off">OFF</span>
-      </div>
-      <div class="cfn-row" data-fn="user-limit" title="Limit simultaneous voice users (click to set; blank = unlimited)">
-        <span class="cfn-label">👥 Voice Limit</span>
-        <span class="cfn-badge cfn-off">∞</span>
-      </div>
-      <div class="cfn-row" data-fn="voice-bitrate" title="Cap voice audio bitrate in kbps (0 = auto / no cap)">
-        <span class="cfn-label">🎚️ Voice Bitrate</span>
-        <span class="cfn-badge cfn-off">Auto</span>
       </div>
       <div class="cfn-divider"></div>
       <div class="cfn-row" data-fn="self-destruct" title="Set a self-destruct timer — channel auto-deletes after the specified hours (0 = off)">
@@ -2702,7 +2518,7 @@
       <ul class="android-beta-promo-features">
         <li><span class="promo-check">✓</span> Native Android experience</li>
         <li><span class="promo-check">✓</span> Push notifications</li>
-        <li><span class="promo-check">✓</span> Full chat &amp; voice support</li>
+        <li><span class="promo-check">✓</span> Full chat support</li>
         <li><span class="promo-check">✓</span> Built from the ground up for Haven</li>
       </ul>
       <p class="android-beta-promo-note">Request access to the closed beta on Google Play:</p>
@@ -2778,7 +2594,6 @@
   <script src="/js/theme.js?v=2.7.3"></script>
   <script src="/js/notifications.js?v=2.6.0"></script>
   <script src="/js/servers.js?v=2.6.0"></script>
-  <script src="/js/voice.js?v=2.6.0"></script>
   <script src="/js/modmode.js?v=2.6.0"></script>
   <script src="/js/e2e.js?v=2.0"></script>
   <script type="module" src="/js/app.js?v=2.0"></script>

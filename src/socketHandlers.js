@@ -8,6 +8,7 @@ const { sendFcm, isFcmEnabled } = require('./fcm');
 const { DATA_DIR, UPLOADS_DIR, DELETED_ATTACHMENTS_DIR } = require('./paths');
 const { deleteUploadByName } = require('./storage');
 const HAVEN_VERSION = require('../package.json').version;
+const VOICE_CHAT_ENABLED = false;
 
 // ── Normalize SQLite timestamps to UTC ISO 8601 ────────
 // SQLite CURRENT_TIMESTAMP produces UTC without 'Z' suffix;
@@ -2034,28 +2035,47 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ VOICE (WebRTC Signaling) ═══════════════
 
-    socket.on('voice-join', (data) => {
+    socket.on('voice-join', (data, callback) => {
+      if (!VOICE_CHAT_ENABLED) {
+        socket.emit('error-msg', 'Voice chat is disabled');
+        if (typeof callback === 'function') callback({ ok: false, error: 'Voice chat is disabled' });
+        return;
+      }
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
+      if (!code || !/^[a-f0-9]{8}$/i.test(code)) {
+        if (typeof callback === 'function') callback({ ok: false, error: 'Invalid channel code' });
+        return;
+      }
 
       // Verify channel membership before allowing voice
       const vch = db.prepare('SELECT id FROM channels WHERE code = ?').get(code);
-      if (!vch) return;
+      if (!vch) {
+        if (typeof callback === 'function') callback({ ok: false, error: 'Channel not found' });
+        return;
+      }
       const vMember = db.prepare(
         'SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?'
       ).get(vch.id, socket.user.id);
-      if (!vMember) return socket.emit('error-msg', 'Not a member of this channel');
+      if (!vMember) {
+        socket.emit('error-msg', 'Not a member of this channel');
+        if (typeof callback === 'function') callback({ ok: false, error: 'Not a member of this channel' });
+        return;
+      }
 
       // Check channel type and voice user limit
       const vchSettings = db.prepare('SELECT voice_enabled, voice_user_limit, voice_bitrate FROM channels WHERE code = ?').get(code);
       if (vchSettings && vchSettings.voice_enabled === 0) {
-        return socket.emit('error-msg', 'Voice is disabled in this channel');
+        socket.emit('error-msg', 'Voice is disabled in this channel');
+        if (typeof callback === 'function') callback({ ok: false, error: 'Voice is disabled in this channel' });
+        return;
       }
       if (vchSettings && vchSettings.voice_user_limit > 0) {
         const currentCount = voiceUsers.has(code) ? voiceUsers.get(code).size : 0;
         if (currentCount >= vchSettings.voice_user_limit) {
-          return socket.emit('error-msg', `Voice is full (${currentCount}/${vchSettings.voice_user_limit})`);
+          socket.emit('error-msg', `Voice is full (${currentCount}/${vchSettings.voice_user_limit})`);
+          if (typeof callback === 'function') callback({ ok: false, error: `Voice is full (${currentCount}/${vchSettings.voice_user_limit})` });
+          return;
         }
       }
 
@@ -2113,6 +2133,7 @@ function setupSocketHandlers(io, db) {
           resolvedFrom: music.resolvedFrom
         });
       }
+      if (typeof callback === 'function') callback({ ok: true, voiceBitrate: vchSettings ? (vchSettings.voice_bitrate || 0) : 0 });
 
       // Send active screen share info to late joiner — tell screen sharers to renegotiate
       const sharers = activeScreenSharers.get(code);
@@ -2987,6 +3008,11 @@ function setupSocketHandlers(io, db) {
 
     // On-demand voice user list fetch — client can request at any time
     socket.on('request-voice-users', (data) => {
+      if (!VOICE_CHAT_ENABLED) {
+        const code = typeof data?.code === 'string' ? data.code.trim() : '';
+        if (code) socket.emit('voice-users-update', { channelCode: code, users: [] });
+        return;
+      }
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
@@ -3024,6 +3050,7 @@ function setupSocketHandlers(io, db) {
 
     // Voice re-join after socket reconnect — server lost state during disconnect
     socket.on('voice-rejoin', (data) => {
+      if (!VOICE_CHAT_ENABLED) return;
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
