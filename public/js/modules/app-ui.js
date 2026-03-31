@@ -3960,9 +3960,15 @@ _renderServerBar() {
   const home = document.getElementById('home-server');
   const dmBubble = document.getElementById('dm-server-bubble');
   const announcementsBubble = document.getElementById('announcements-server-bubble');
+  if (dmBubble) dmBubble.onclick = () => this._openDirectMessages();
+  if (announcementsBubble) announcementsBubble.onclick = () => this._openAnnouncements();
   if (dmBubble) dmBubble.classList.toggle('active', this.sidebarView === 'dms');
   if (announcementsBubble) announcementsBubble.classList.toggle('active', this.sidebarView === 'announcements');
   if (home) {
+    home.onclick = () => {
+      const mainServer = (this.servers || []).find(s => s.name === 'Main') || this.servers?.[0];
+      if (mainServer) this._selectServer(mainServer.id);
+    };
     home.classList.toggle('active', this.sidebarView !== 'dms' && this.sidebarView !== 'announcements' && !!main && this.currentServerId === main.id);
     const homeName = main?.name || 'Main';
     const useDefaultBranding = !main || main.name === 'Main' || main.is_legacy_main;
@@ -4010,7 +4016,7 @@ _renderServerBar() {
   }).join('');
 
   list.querySelectorAll('.server-icon.remote').forEach((el) => {
-    el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
+    el.onclick = () => this._selectServer(parseInt(el.dataset.serverId, 10));
   });
   this._renderMobileSidebarServers();
 },
@@ -4033,10 +4039,12 @@ _renderMobileServerList() {
       <span>${this._escapeHtml(s.name)}</span>
     </button>
   `).join('');
-  list.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
-  list.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
+  const mobileDms = list.querySelector('[data-mobile-target="dms"]');
+  const mobileAnnouncements = list.querySelector('[data-mobile-target="announcements"]');
+  if (mobileDms) mobileDms.onclick = () => this._openDirectMessages();
+  if (mobileAnnouncements) mobileAnnouncements.onclick = () => this._openAnnouncements();
   list.querySelectorAll('[data-server-id]').forEach((el) => {
-    el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
+    el.onclick = () => this._selectServer(parseInt(el.dataset.serverId, 10));
   });
 },
 
@@ -4055,10 +4063,12 @@ _renderMobileSidebarServers() {
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" alt="${this._escapeHtml(s.name)}" class="mobile-srv-icon-img">` : `<span>${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
     </button>
   `).join('');
-  scroll.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
-  scroll.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
+  const mobileDms = scroll.querySelector('[data-mobile-target="dms"]');
+  const mobileAnnouncements = scroll.querySelector('[data-mobile-target="announcements"]');
+  if (mobileDms) mobileDms.onclick = () => this._openDirectMessages();
+  if (mobileAnnouncements) mobileAnnouncements.onclick = () => this._openAnnouncements();
   scroll.querySelectorAll('[data-server-id]').forEach((el) => {
-    el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
+    el.onclick = () => this._selectServer(parseInt(el.dataset.serverId, 10));
   });
 },
 
