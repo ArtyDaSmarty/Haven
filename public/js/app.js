@@ -16,6 +16,31 @@ import UtilityMethods  from './modules/app-utilities.js?v=2.7.9';
 import AdminMethods    from './modules/app-admin.js?v=2.7.0';
 import PlatformMethods from './modules/app-platform.js?v=2.7.8';
 
+const VOICE_CHAT_ENABLED = false;
+
+function createDisabledVoiceManager() {
+  return {
+    inVoice: false,
+    currentChannel: null,
+    isMuted: false,
+    isDeafened: false,
+    screenStream: null,
+    webcamUsers: new Set(),
+    talkingState: new Map(),
+    peers: new Map(),
+    localUserId: null,
+    join: async () => false,
+    leave: () => {},
+    toggleMute: () => false,
+    toggleDeafen: () => false,
+    setVolume: () => {},
+    setStreamVolume: () => {},
+    isUserDeafened: () => false,
+    deafenUser: () => {},
+    undeafenUser: () => {}
+  };
+}
+
 class HavenApp {
   constructor() {
     this.token = localStorage.getItem('haven_token');
@@ -47,8 +72,9 @@ class HavenApp {
     this.userStatus = 'online';    // current user's status
     this.userStatusText = '';      // custom status text
     this.idleTimer = null;         // auto-away timer
-    this.voiceCounts = {};         // { channelCode: count } for sidebar voice indicators
-    this.voiceChannelUsers = {};   // { channelCode: [{id, username}] } for sidebar voice user lists
+    this.voiceDisabled = !VOICE_CHAT_ENABLED;
+    this.voiceCounts = {};         // { channelCode: count } for legacy voice indicators
+    this.voiceChannelUsers = {};   // { channelCode: [{id, username}] } for legacy voice lists
     this.e2e = null;               // HavenE2E instance for DM encryption
     this._dmPublicKeys = {};       // { userId → jwk } cache for DM partner public keys
     this._e2eListenersAttached = false;
@@ -156,7 +182,9 @@ class HavenApp {
       reconnectionDelayMax: 10000,
       randomizationFactor: 0.4,
     });
-    this.voice = new VoiceManager(this.socket);
+    this.voice = VOICE_CHAT_ENABLED && typeof VoiceManager === 'function'
+      ? new VoiceManager(this.socket)
+      : createDisabledVoiceManager();
     if (this.user && this.user.id) this.voice.localUserId = this.user.id;
     
     // CRITICAL FIX: Run avatar setup first and use delegation to ensure listeners work
