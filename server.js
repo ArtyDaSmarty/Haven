@@ -5,6 +5,7 @@ const { DATA_DIR, DB_PATH, ENV_PATH, CERTS_DIR, UPLOADS_DIR } = require('./src/p
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const jwt = require('jsonwebtoken');
 const {
   addDirectoryToZip,
   appendActiveUploadsToZip,
@@ -103,6 +104,40 @@ if (!process.env.HAVEN_SETTINGS_SECRET) {
   console.log('🔐 Auto-generated HAVEN_SETTINGS_SECRET');
 }
 
+function envFlag(name, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return !!defaultValue;
+  return !/^(0|false|no|off)$/i.test(String(raw).trim());
+}
+
+function persistEnvValue(name, value, reason) {
+  let envContent = tryReadEnvFile();
+  const linePattern = new RegExp(`^${name}=.*$`, 'm');
+  if (linePattern.test(envContent)) {
+    envContent = envContent.replace(linePattern, `${name}=${value}`);
+  } else {
+    if (envContent && !envContent.endsWith('\n')) envContent += '\n';
+    envContent += `${name}=${value}\n`;
+  }
+  tryWriteEnvFile(envContent, reason);
+  process.env[name] = value;
+}
+
+const managedLiveKitEnabled = VOICE_CHAT_ENABLED && envFlag('LIVEKIT_MANAGED', !String(process.env.LIVEKIT_URL || '').trim());
+if (managedLiveKitEnabled) {
+  if (!process.env.LIVEKIT_API_KEY) {
+    persistEnvValue('LIVEKIT_API_KEY', 'sanctuary-managed', 'saving LiveKit API key');
+    console.log('Auto-configured LIVEKIT_API_KEY');
+  }
+  if (!process.env.LIVEKIT_API_SECRET) {
+    persistEnvValue('LIVEKIT_API_SECRET', crypto.randomBytes(48).toString('base64url'), 'saving LiveKit API secret');
+    console.log('Auto-generated LIVEKIT_API_SECRET');
+  }
+  if (!process.env.LIVEKIT_VERSION) {
+    persistEnvValue('LIVEKIT_VERSION', '1.9.8', 'saving LiveKit version');
+  }
+}
+
 // ── Auto-generate VAPID keys for push notifications ──────
 const webpush = require('web-push');
 if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
@@ -124,6 +159,16 @@ const { router: authRoutes, authLimiter, verifyToken } = require('./src/auth');
 const { setupSocketHandlers, sanitizeText } = require('./src/socketHandlers');
 const { startTunnel, stopTunnel, getTunnelStatus, registerProcessCleanup } = require('./src/tunnel');
 const { initFcm } = require('./src/fcm');
+const {
+  ensureManagedLiveKitStarted,
+  getLiveKitConnectionInfo,
+  getManagedLiveKitStatus,
+  getManagedLiveKitTargetUrl,
+  isManagedLiveKitEnabled,
+  stopManagedLiveKit
+} = require('./src/livekitManager');
+
+const VOICE_CHAT_ENABLED = false;
 
 const app = express();
 
@@ -221,6 +266,83 @@ app.use('/uploads', express.static(UPLOADS_DIR, {
     }
   }
 }));
+app.use('/vendor/livekit', express.static(path.join(__dirname, 'node_modules', 'livekit-client', 'dist'), { dotfiles: 'deny', maxAge: '7d' }));
+
+function getLiveKitProxyRequestOptions(req) {
+  const target = new URL(getManagedLiveKitTargetUrl());
+  const forwardedHost = req.headers.host;
+  const headers = {
+    ...req.headers,
+    host: target.host
+  };
+  if (forwardedHost) headers['x-forwarded-host'] = forwardedHost;
+  headers['x-forwarded-proto'] = useSSL ? 'https' : 'http';
+  return {
+    protocol: target.protocol,
+    hostname: target.hostname,
+    port: target.port,
+    method: req.method,
+    path: req.url || '/',
+    headers
+  };
+}
+
+function proxyLiveKitHttp(req, res) {
+  const options = getLiveKitProxyRequestOptions(req);
+  const proxyReq = require(options.protocol === 'https:' ? 'https' : 'http').request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 502, proxyRes.statusMessage, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', (err) => {
+    console.warn(`[livekit/proxy] ${req?.url || '/livekit'}: ${err.message}`);
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+    }
+    res.end(JSON.stringify({ error: 'Managed LiveKit is not ready yet' }));
+  });
+  req.pipe(proxyReq);
+}
+
+function proxyLiveKitUpgrade(req, socket, head) {
+  const options = getLiveKitProxyRequestOptions(req);
+  const proxyReq = require(options.protocol === 'https:' ? 'https' : 'http').request(options);
+  proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+    const statusLine = `HTTP/1.1 ${proxyRes.statusCode || 101} ${proxyRes.statusMessage || 'Switching Protocols'}\r\n`;
+    socket.write(statusLine);
+    for (const [key, value] of Object.entries(proxyRes.headers || {})) {
+      if (Array.isArray(value)) {
+        for (const item of value) socket.write(`${key}: ${item}\r\n`);
+      } else if (value != null) {
+        socket.write(`${key}: ${value}\r\n`);
+      }
+    }
+    socket.write('\r\n');
+    if (proxyHead?.length) socket.write(proxyHead);
+    if (head?.length) proxySocket.write(head);
+    proxySocket.pipe(socket).pipe(proxySocket);
+  });
+  proxyReq.on('response', (proxyRes) => {
+    socket.write(`HTTP/1.1 ${proxyRes.statusCode || 502} ${proxyRes.statusMessage || 'Bad Gateway'}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+  });
+  proxyReq.on('error', (err) => {
+    console.warn(`[livekit/proxy] ${req?.url || '/livekit'}: ${err.message}`);
+    try {
+      socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+    } catch {}
+    socket.destroy();
+  });
+  proxyReq.end();
+}
+
+app.use('/livekit', (req, res) => {
+  if (!VOICE_CHAT_ENABLED) {
+    return res.status(410).json({ error: 'Voice chat is disabled' });
+  }
+  const originalUrl = req.url || '/';
+  req.url = originalUrl || '/';
+  proxyLiveKitHttp(req, res);
+});
 
 app.get('/uploads/:name', async (req, res, next) => {
   const name = typeof req.params.name === 'string' ? req.params.name.trim() : '';
@@ -448,6 +570,99 @@ app.get('/api/ice-servers', (req, res) => {
   }
 
   res.json({ iceServers });
+});
+
+app.get('/api/livekit/token', async (req, res) => {
+  if (!VOICE_CHAT_ENABLED) {
+    return res.status(410).json({ error: 'Voice chat is disabled' });
+  }
+  const token = req.headers.authorization?.split(' ')[1];
+  const user = token ? verifyToken(token) : null;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const livekitInfo = await getLiveKitConnectionInfo(req, { useSSL });
+  const livekitUrl = String(livekitInfo.url || '').trim();
+  const livekitApiKey = String(livekitInfo.apiKey || '').trim();
+  const livekitApiSecret = String(livekitInfo.apiSecret || '').trim();
+  if (!livekitUrl || !livekitApiKey || !livekitApiSecret || !livekitInfo.ready && livekitInfo.managed) {
+    const detail = livekitInfo.error ? ` (${livekitInfo.error})` : '';
+    return res.status(503).json({ error: `LiveKit is not ready${detail}` });
+  }
+  if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
+    return res.status(503).json({ error: 'LiveKit is not configured' });
+  }
+
+  const code = typeof req.query.channel === 'string' ? req.query.channel.trim() : '';
+  if (!/^[a-f0-9]{8}$/i.test(code)) {
+    return res.status(400).json({ error: 'Invalid channel code' });
+  }
+
+  try {
+    const { getDb } = require('./src/database');
+    const db = getDb();
+    const channel = db.prepare(`
+      SELECT id, code, name, is_dm, special_section, voice_enabled, server_id
+      FROM channels
+      WHERE code = ?
+      LIMIT 1
+    `).get(code);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    if (channel.is_dm) return res.status(400).json({ error: 'Direct messages do not support voice rooms' });
+    if (channel.voice_enabled === 0) return res.status(403).json({ error: 'Voice is disabled in this channel' });
+
+    const member = db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1').get(channel.id, user.id);
+    if (!member) return res.status(403).json({ error: 'You do not have access to this channel' });
+
+    const ban = db.prepare('SELECT id FROM bans WHERE user_id = ? LIMIT 1').get(user.id);
+    if (ban) return res.status(403).json({ error: 'Banned users cannot use voice chat' });
+
+    const mute = db.prepare("SELECT id FROM mutes WHERE user_id = ? AND expires_at > datetime('now') LIMIT 1").get(user.id);
+    if (mute) return res.status(403).json({ error: 'You are muted and cannot use voice chat right now' });
+
+    const serverMute = channel.server_id
+      ? db.prepare("SELECT expires_at FROM server_mutes WHERE server_id = ? AND user_id = ? AND expires_at > datetime('now') LIMIT 1").get(channel.server_id, user.id)
+      : null;
+    if (serverMute) return res.status(403).json({ error: 'You are server-muted and cannot use voice chat right now' });
+
+    const canUseVoice = verifyAdminFromDb(user) || userHasPermission(user.id, 'use_voice');
+    if (!canUseVoice) return res.status(403).json({ error: 'You do not have permission to use voice chat' });
+
+    const now = Math.floor(Date.now() / 1000);
+    const roomName = `haven-voice-${code}`;
+    const livekitToken = jwt.sign({
+      iss: livekitApiKey,
+      sub: String(user.id),
+      nbf: now,
+      exp: now + (60 * 60),
+      name: user.displayName || user.username || String(user.id),
+      metadata: JSON.stringify({
+        havenUserId: user.id,
+        username: user.username,
+        displayName: user.displayName || user.username || String(user.id),
+        channelCode: code
+      }),
+      video: {
+        roomJoin: true,
+        room: roomName,
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: true
+      }
+    }, livekitApiSecret, {
+      algorithm: 'HS256',
+      header: { typ: 'JWT' }
+    });
+
+    res.json({
+      url: livekitUrl,
+      token: livekitToken,
+      roomName,
+      channelCode: code
+    });
+  } catch (err) {
+    console.error('[livekit/token]', err);
+    res.status(500).json({ error: 'Failed to create LiveKit token' });
+  }
 });
 
 // ── Avatar upload endpoint (saves to /uploads, updates DB) ──
@@ -2465,6 +2680,19 @@ if (!sslCert && !sslKey) {
 const forceHttp = (process.env.FORCE_HTTP || '').toLowerCase() === 'true';
 const useSSL = sslCert && sslKey && !forceHttp;
 
+if (isManagedLiveKitEnabled()) {
+  ensureManagedLiveKitStarted().then(async (status) => {
+    const info = await getLiveKitConnectionInfo(null, { useSSL }).catch(() => null);
+    console.log(`LiveKit managed voice ready on ${info?.url || `port ${process.env.LIVEKIT_SIGNAL_PORT || '7880'}`}`);
+    if (status?.error) console.warn(`LiveKit managed voice warning: ${status.error}`);
+  }).catch((err) => {
+    console.warn(`LiveKit managed voice failed to start: ${err.message}`);
+  });
+}
+if (!VOICE_CHAT_ENABLED) {
+  stopManagedLiveKit();
+}
+
 if (forceHttp) {
   console.log('⚡ FORCE_HTTP=true — running plain HTTP (reverse proxy mode)');
 }
@@ -2516,8 +2744,15 @@ if (useSSL) {
   }
 } else {
   server = createServer(app);
-  console.log('⚠️  Running HTTP — voice chat requires HTTPS for remote connections');
+  console.log('⚠️  Running HTTP');
 }
+
+server.on('upgrade', (req, socket, head) => {
+  const url = String(req.url || '');
+  if (!url.startsWith('/livekit')) return;
+  req.url = url.replace(/^\/livekit/, '') || '/';
+  proxyLiveKitUpgrade(req, socket, head);
+});
 
 // Socket.IO — locked down
 const io = new Server(server, {
@@ -2726,6 +2961,7 @@ server.keepAliveTimeout = 65000;   // slightly above typical ALB/LB timeout
 server.timeout = 120000;           // 2 min absolute socket timeout
 
 server.listen(PORT, HOST, () => {
+  const livekitStatus = getManagedLiveKitStatus();
   console.log(`
 ╔══════════════════════════════════════════╗
 ║       🏠  HAVEN is running               ║
@@ -2736,11 +2972,15 @@ server.listen(PORT, HOST, () => {
 ║  Admin:   ${(process.env.ADMIN_USERNAME || 'admin').padEnd(29)}║
 ╚══════════════════════════════════════════╝
   `);
+  if (VOICE_CHAT_ENABLED && livekitStatus.enabled) {
+    console.log(`🎙️  Managed LiveKit: ${livekitStatus.ready ? 'ready' : 'starting'} on signal ${process.env.LIVEKIT_SIGNAL_PORT || '7880'}, tcp ${process.env.LIVEKIT_TCP_PORT || '7881'}, udp ${process.env.LIVEKIT_UDP_PORT || '7882'}`);
+  }
   // Tunnel is now started manually via the admin panel button (no auto-start)
 });
 
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received — shutting down`);
+  stopManagedLiveKit();
   io.close();
   server.close(() => process.exit(0));
 }
