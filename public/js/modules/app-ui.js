@@ -2861,9 +2861,12 @@ _setupMobile() {
   const usersBtn = document.getElementById('mobile-users-btn');
   const overlay = document.getElementById('mobile-overlay');
   const appBody = document.getElementById('app-body');
+  const isMobileViewport = () => window.matchMedia('(max-width: 768px)').matches;
+  if (!menuBtn || !usersBtn || !overlay || !appBody) return;
 
   // Hamburger — toggle left sidebar
   menuBtn.addEventListener('click', () => {
+    if (!isMobileViewport()) return;
     const isOpen = appBody.classList.toggle('mobile-sidebar-open');
     appBody.classList.remove('mobile-right-open');
     if (isOpen) overlay.classList.add('active');
@@ -2872,6 +2875,7 @@ _setupMobile() {
 
   // Users button — toggle right sidebar
   usersBtn.addEventListener('click', () => {
+    if (!isMobileViewport()) return;
     const isOpen = appBody.classList.toggle('mobile-right-open');
     appBody.classList.remove('mobile-sidebar-open');
     if (isOpen) overlay.classList.add('active');
@@ -2889,7 +2893,7 @@ _setupMobile() {
   const origSwitch = this.switchChannel.bind(this);
   this.switchChannel = (code) => {
     origSwitch(code);
-    this._closeMobilePanels();
+    if (isMobileViewport()) this._closeMobilePanels();
   };
 
   // Swipe gesture support (touch)
@@ -2903,6 +2907,7 @@ _setupMobile() {
   }, { passive: true });
 
   document.addEventListener('touchend', (e) => {
+    if (!isMobileViewport()) return;
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
     // Only process horizontal swipes (not scrolling)
@@ -2924,6 +2929,10 @@ _setupMobile() {
       this._closeMobilePanels();
     }
   }, { passive: true });
+
+  window.addEventListener('resize', () => {
+    if (!isMobileViewport()) this._closeMobilePanels();
+  });
 
   // ── Mobile server dropdown ──
   const mobileServerBtn = document.getElementById('mobile-server-btn');
@@ -3040,7 +3049,9 @@ _setupMobile() {
 
     // Deselect when focusing input area
     document.getElementById('message-input').addEventListener('focus', () => {
+      if (isMobileViewport()) this._closeMobilePanels();
       _deselectAll();
+      requestAnimationFrame(() => document.getElementById('message-input')?.scrollIntoView({ block: 'nearest' }));
     });
 
     // Deselect on significant scroll (debounced, threshold-based)
