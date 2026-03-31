@@ -1153,37 +1153,62 @@ _setupUI() {
   });
   document.getElementById('forum-create-post-btn')?.addEventListener('click', () => {
     const modal = document.getElementById('forum-post-modal');
+    this._editingForumPostCode = null;
     const parent = this.channels.find(c => c.code === this._forumView?.parentCode);
+    document.getElementById('forum-post-modal-title').textContent = 'Create Forum Post';
     document.getElementById('forum-post-modal-desc').textContent = parent
       ? `Start a new post inside # ${parent.name}.`
       : 'Start a new post inside this forum.';
     document.getElementById('forum-post-title').value = '';
     document.getElementById('forum-post-tag').value = '';
     document.getElementById('forum-post-body').value = '';
+    document.getElementById('forum-post-body-group').style.display = '';
+    document.getElementById('forum-post-submit-btn').textContent = 'Create Post';
     if (modal) modal.style.display = 'flex';
     setTimeout(() => document.getElementById('forum-post-title')?.focus(), 20);
   });
   document.getElementById('forum-post-cancel-btn')?.addEventListener('click', () => {
     document.getElementById('forum-post-modal').style.display = 'none';
+    this._editingForumPostCode = null;
   });
   document.getElementById('forum-post-modal')?.addEventListener('click', (e) => {
     if (e.target.id === 'forum-post-modal') {
       document.getElementById('forum-post-modal').style.display = 'none';
+      this._editingForumPostCode = null;
     }
   });
   document.getElementById('forum-post-submit-btn')?.addEventListener('click', () => {
     const parentCode = this._forumView?.parentCode;
+    const editingCode = this._editingForumPostCode;
     const title = document.getElementById('forum-post-title')?.value.trim() || '';
     const tag = document.getElementById('forum-post-tag')?.value.trim() || '';
     const body = document.getElementById('forum-post-body')?.value.trim() || '';
-    if (!parentCode || !title || !body) {
+    if (!parentCode || !title || (!editingCode && !body)) {
       this._showToast('Title and original post are required', 'error');
+      return;
+    }
+    if (editingCode) {
+      this.socket.emit('update-forum-post-meta', { code: editingCode, title, tag }, (res) => {
+        if (!res) return;
+        if (res.error) return this._showToast(res.error, 'error');
+        document.getElementById('forum-post-modal').style.display = 'none';
+        this._editingForumPostCode = null;
+        const channel = this.channels.find(c => c.code === editingCode);
+        if (channel) {
+          channel.name = title;
+          channel.category = tag || null;
+        }
+        this._renderChannels?.();
+        if (parentCode) this.socket.emit('get-forum-overview', { code: parentCode });
+        this._showToast('Forum post updated', 'success');
+      });
       return;
     }
     this.socket.emit('create-forum-post', { parentCode, title, tag, body }, (res) => {
       if (!res) return;
       if (res.error) return this._showToast(res.error, 'error');
       document.getElementById('forum-post-modal').style.display = 'none';
+      this._editingForumPostCode = null;
       if (res.channel && !this.channels.find(c => c.code === res.channel.code)) {
         this.channels.push(res.channel);
         this._renderChannels();
@@ -2342,6 +2367,13 @@ _setupUI() {
       cleanupSize.value = val;
     });
   }
+  const forumClosedDelete = document.getElementById('forum-closed-delete-days');
+  if (forumClosedDelete) {
+    forumClosedDelete.addEventListener('change', () => {
+      const val = Math.max(0, Math.min(3650, parseInt(forumClosedDelete.value) || 0));
+      forumClosedDelete.value = val;
+    });
+  }
 
   const runCleanupBtn = document.getElementById('run-cleanup-now-btn');
   if (runCleanupBtn) {
@@ -2861,9 +2893,12 @@ _setupMobile() {
   const usersBtn = document.getElementById('mobile-users-btn');
   const overlay = document.getElementById('mobile-overlay');
   const appBody = document.getElementById('app-body');
+  const isMobileViewport = () => window.matchMedia('(max-width: 768px)').matches;
+  if (!menuBtn || !usersBtn || !overlay || !appBody) return;
 
   // Hamburger — toggle left sidebar
   menuBtn.addEventListener('click', () => {
+    if (!isMobileViewport()) return;
     const isOpen = appBody.classList.toggle('mobile-sidebar-open');
     appBody.classList.remove('mobile-right-open');
     if (isOpen) overlay.classList.add('active');
@@ -2872,6 +2907,7 @@ _setupMobile() {
 
   // Users button — toggle right sidebar
   usersBtn.addEventListener('click', () => {
+    if (!isMobileViewport()) return;
     const isOpen = appBody.classList.toggle('mobile-right-open');
     appBody.classList.remove('mobile-sidebar-open');
     if (isOpen) overlay.classList.add('active');
@@ -2889,7 +2925,7 @@ _setupMobile() {
   const origSwitch = this.switchChannel.bind(this);
   this.switchChannel = (code) => {
     origSwitch(code);
-    this._closeMobilePanels();
+    if (isMobileViewport()) this._closeMobilePanels();
   };
 
   // Swipe gesture support (touch)
@@ -2903,6 +2939,7 @@ _setupMobile() {
   }, { passive: true });
 
   document.addEventListener('touchend', (e) => {
+    if (!isMobileViewport()) return;
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
     // Only process horizontal swipes (not scrolling)
@@ -2924,6 +2961,10 @@ _setupMobile() {
       this._closeMobilePanels();
     }
   }, { passive: true });
+
+  window.addEventListener('resize', () => {
+    if (!isMobileViewport()) this._closeMobilePanels();
+  });
 
   // ── Mobile server dropdown ──
   const mobileServerBtn = document.getElementById('mobile-server-btn');
@@ -3040,7 +3081,9 @@ _setupMobile() {
 
     // Deselect when focusing input area
     document.getElementById('message-input').addEventListener('focus', () => {
+      if (isMobileViewport()) this._closeMobilePanels();
       _deselectAll();
+      requestAnimationFrame(() => document.getElementById('message-input')?.scrollIntoView({ block: 'nearest' }));
     });
 
     // Deselect on significant scroll (debounced, threshold-based)
@@ -3696,22 +3739,8 @@ _refreshSelectedServerSettings() {
 _setupServerBar() {
   this._renderServerBar();
 
-  document.getElementById('dm-server-bubble')?.addEventListener('click', () => {
-    this.sidebarView = 'dms';
-    const firstDm = this.channels.find(c => c.is_dm);
-    if (firstDm) this.switchChannel(firstDm.code);
-    this._renderServerBar();
-    this._renderChannels();
-    this._applyThemePreferenceStack();
-  });
-  document.getElementById('announcements-server-bubble')?.addEventListener('click', () => {
-    this.sidebarView = 'announcements';
-    const channel = this._getAnnouncementChannel?.();
-    if (channel) this.switchChannel(channel.code);
-    this._renderServerBar();
-    this._renderChannels();
-    this._applyThemePreferenceStack();
-  });
+  document.getElementById('dm-server-bubble')?.addEventListener('click', () => this._openDirectMessages());
+  document.getElementById('announcements-server-bubble')?.addEventListener('click', () => this._openAnnouncements());
 
   document.getElementById('home-server')?.addEventListener('click', () => {
     const main = (this.servers || []).find(s => s.name === 'Main') || this.servers?.[0];
@@ -3741,6 +3770,32 @@ _setupServerBar() {
     document.getElementById('manage-servers-modal').style.display = 'none';
     this._openServerEditor();
   });
+},
+
+_openDirectMessages() {
+  this.sidebarView = 'dms';
+  const firstDm = this.channels.find(c => c.is_dm);
+  if (firstDm) {
+    this.switchChannel(firstDm.code);
+    return;
+  }
+  this._renderServerBar();
+  this._renderChannels();
+  this._applyThemePreferenceStack();
+  this._closeMobilePanels?.();
+},
+
+_openAnnouncements() {
+  this.sidebarView = 'announcements';
+  const channel = this._getAnnouncementChannel?.();
+  if (channel) {
+    this.switchChannel(channel.code);
+    return;
+  }
+  this._renderServerBar();
+  this._renderChannels();
+  this._applyThemePreferenceStack();
+  this._closeMobilePanels?.();
 },
 
 _addServer() {
@@ -3953,12 +4008,23 @@ _renderServerBar() {
 _renderMobileServerList() {
   const list = document.getElementById('mobile-server-list');
   if (!list) return;
-  list.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
+  list.innerHTML = `
+    <button class="mobile-server-item${this.sidebarView === 'dms' ? ' active' : ''}" data-mobile-target="dms">
+      <span class="msrv-initial">💬</span>
+      <span>Direct Messages</span>
+    </button>
+    <button class="mobile-server-item${this.sidebarView === 'announcements' ? ' active' : ''}" data-mobile-target="announcements">
+      <span class="msrv-initial">📣</span>
+      <span>Admin Announcements</span>
+    </button>
+  ` + this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-server-item" data-server-id="${s.id}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" class="msrv-icon" alt="">` : `<span class="msrv-initial">${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
       <span>${this._escapeHtml(s.name)}</span>
     </button>
   `).join('');
+  list.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
+  list.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
   list.querySelectorAll('[data-server-id]').forEach((el) => {
     el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
   });
@@ -3967,11 +4033,20 @@ _renderMobileServerList() {
 _renderMobileSidebarServers() {
   const scroll = document.getElementById('mobile-servers-scroll');
   if (!scroll) return;
-  scroll.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
+  scroll.innerHTML = `
+    <button class="mobile-srv-bubble${this.sidebarView === 'dms' ? ' active' : ''}" data-mobile-target="dms" title="Direct Messages">
+      <span>💬</span>
+    </button>
+    <button class="mobile-srv-bubble${this.sidebarView === 'announcements' ? ' active' : ''}" data-mobile-target="announcements" title="Admin Announcements">
+      <span>📣</span>
+    </button>
+  ` + this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-srv-bubble${this.currentServerId === s.id ? ' active' : ''}" data-server-id="${s.id}" title="${this._escapeHtml(s.name)}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" alt="${this._escapeHtml(s.name)}" class="mobile-srv-icon-img">` : `<span>${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
     </button>
   `).join('');
+  scroll.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
+  scroll.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
   scroll.querySelectorAll('[data-server-id]').forEach((el) => {
     el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
   });
