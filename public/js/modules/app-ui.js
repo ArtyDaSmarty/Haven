@@ -3707,22 +3707,8 @@ _refreshSelectedServerSettings() {
 _setupServerBar() {
   this._renderServerBar();
 
-  document.getElementById('dm-server-bubble')?.addEventListener('click', () => {
-    this.sidebarView = 'dms';
-    const firstDm = this.channels.find(c => c.is_dm);
-    if (firstDm) this.switchChannel(firstDm.code);
-    this._renderServerBar();
-    this._renderChannels();
-    this._applyThemePreferenceStack();
-  });
-  document.getElementById('announcements-server-bubble')?.addEventListener('click', () => {
-    this.sidebarView = 'announcements';
-    const channel = this._getAnnouncementChannel?.();
-    if (channel) this.switchChannel(channel.code);
-    this._renderServerBar();
-    this._renderChannels();
-    this._applyThemePreferenceStack();
-  });
+  document.getElementById('dm-server-bubble')?.addEventListener('click', () => this._openDirectMessages());
+  document.getElementById('announcements-server-bubble')?.addEventListener('click', () => this._openAnnouncements());
 
   document.getElementById('home-server')?.addEventListener('click', () => {
     const main = (this.servers || []).find(s => s.name === 'Main') || this.servers?.[0];
@@ -3752,6 +3738,32 @@ _setupServerBar() {
     document.getElementById('manage-servers-modal').style.display = 'none';
     this._openServerEditor();
   });
+},
+
+_openDirectMessages() {
+  this.sidebarView = 'dms';
+  const firstDm = this.channels.find(c => c.is_dm);
+  if (firstDm) {
+    this.switchChannel(firstDm.code);
+    return;
+  }
+  this._renderServerBar();
+  this._renderChannels();
+  this._applyThemePreferenceStack();
+  this._closeMobilePanels?.();
+},
+
+_openAnnouncements() {
+  this.sidebarView = 'announcements';
+  const channel = this._getAnnouncementChannel?.();
+  if (channel) {
+    this.switchChannel(channel.code);
+    return;
+  }
+  this._renderServerBar();
+  this._renderChannels();
+  this._applyThemePreferenceStack();
+  this._closeMobilePanels?.();
 },
 
 _addServer() {
@@ -3964,12 +3976,23 @@ _renderServerBar() {
 _renderMobileServerList() {
   const list = document.getElementById('mobile-server-list');
   if (!list) return;
-  list.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
+  list.innerHTML = `
+    <button class="mobile-server-item${this.sidebarView === 'dms' ? ' active' : ''}" data-mobile-target="dms">
+      <span class="msrv-initial">💬</span>
+      <span>Direct Messages</span>
+    </button>
+    <button class="mobile-server-item${this.sidebarView === 'announcements' ? ' active' : ''}" data-mobile-target="announcements">
+      <span class="msrv-initial">📣</span>
+      <span>Admin Announcements</span>
+    </button>
+  ` + this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-server-item" data-server-id="${s.id}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" class="msrv-icon" alt="">` : `<span class="msrv-initial">${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
       <span>${this._escapeHtml(s.name)}</span>
     </button>
   `).join('');
+  list.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
+  list.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
   list.querySelectorAll('[data-server-id]').forEach((el) => {
     el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
   });
@@ -3978,11 +4001,20 @@ _renderMobileServerList() {
 _renderMobileSidebarServers() {
   const scroll = document.getElementById('mobile-servers-scroll');
   if (!scroll) return;
-  scroll.innerHTML = this._sortServersForUser(this.servers || []).map((s) => `
+  scroll.innerHTML = `
+    <button class="mobile-srv-bubble${this.sidebarView === 'dms' ? ' active' : ''}" data-mobile-target="dms" title="Direct Messages">
+      <span>💬</span>
+    </button>
+    <button class="mobile-srv-bubble${this.sidebarView === 'announcements' ? ' active' : ''}" data-mobile-target="announcements" title="Admin Announcements">
+      <span>📣</span>
+    </button>
+  ` + this._sortServersForUser(this.servers || []).map((s) => `
     <button class="mobile-srv-bubble${this.currentServerId === s.id ? ' active' : ''}" data-server-id="${s.id}" title="${this._escapeHtml(s.name)}">
       ${s.icon_url ? `<img src="${this._escapeHtml(s.icon_url)}" alt="${this._escapeHtml(s.name)}" class="mobile-srv-icon-img">` : `<span>${this._escapeHtml((s.name || '?')[0].toUpperCase())}</span>`}
     </button>
   `).join('');
+  scroll.querySelector('[data-mobile-target="dms"]')?.addEventListener('click', () => this._openDirectMessages());
+  scroll.querySelector('[data-mobile-target="announcements"]')?.addEventListener('click', () => this._openAnnouncements());
   scroll.querySelectorAll('[data-server-id]').forEach((el) => {
     el.addEventListener('click', () => this._selectServer(parseInt(el.dataset.serverId, 10)));
   });
