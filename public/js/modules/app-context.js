@@ -897,7 +897,9 @@ _startPingMonitor() {
       const channel = this.channels?.find(c => c.code === this.currentChannel);
       if (channel?.special_section !== 'announcements') {
         this.socket.emit('request-online-users', { code: this.currentChannel });
-        this.socket.emit('request-voice-users', { code: this.currentChannel });
+        if (!this.voiceDisabled) {
+          this.socket.emit('request-voice-users', { code: this.currentChannel });
+        }
       }
     }
   }, 30000);
