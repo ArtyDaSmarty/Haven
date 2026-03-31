@@ -265,10 +265,17 @@ _renderForumBrowser() {
         <div class="forum-card-footer">
           <span class="forum-card-status">${post.isClosed ? 'Closed' : (post.isMember ? 'Joined' : 'Not joined')}</span>
           <div class="forum-card-actions">
-            ${post.canEdit ? `<button class="forum-card-edit" data-code="${this._escapeHtml(post.code)}" data-name="${this._escapeHtml(post.name)}" data-tag="${this._escapeHtml(post.tag || '')}">Edit</button>` : ''}
-            ${post.canClose ? `<button class="forum-card-close" data-code="${this._escapeHtml(post.code)}" data-closed="${post.isClosed ? '1' : '0'}">${post.isClosed ? 'Reopen' : 'Close'}</button>` : ''}
-            ${post.canDelete ? `<button class="forum-card-delete" data-code="${this._escapeHtml(post.code)}" data-name="${this._escapeHtml(post.name)}">Delete</button>` : ''}
-            <button class="forum-card-open" data-code="${this._escapeHtml(post.code)}">${post.isClosed ? 'View' : (post.isMember ? 'Open' : 'Join & Open')}</button>
+            ${!post.isMember ? `<button class="forum-card-open" data-code="${this._escapeHtml(post.code)}">${post.isClosed ? 'View' : 'Join & Open'}</button>` : ''}
+            ${(post.canEdit || post.canClose || post.canDelete) ? `
+              <div class="forum-card-settings-wrap">
+                <button class="forum-card-settings-btn" data-code="${this._escapeHtml(post.code)}" title="Post Settings">⚙️</button>
+                <div class="forum-card-settings-menu">
+                  ${post.canEdit ? `<button class="forum-card-menu-btn forum-card-edit" data-code="${this._escapeHtml(post.code)}" data-name="${this._escapeHtml(post.name)}" data-tag="${this._escapeHtml(post.tag || '')}">Edit</button>` : ''}
+                  ${post.canClose ? `<button class="forum-card-menu-btn forum-card-close" data-code="${this._escapeHtml(post.code)}" data-closed="${post.isClosed ? '1' : '0'}">${post.isClosed ? 'Reopen' : 'Close'}</button>` : ''}
+                  ${post.canDelete ? `<button class="forum-card-menu-btn danger forum-card-delete" data-code="${this._escapeHtml(post.code)}" data-name="${this._escapeHtml(post.name)}">Delete</button>` : ''}
+                </div>
+              </div>
+            ` : ''}
           </div>
         </div>
       </article>
@@ -318,6 +325,18 @@ _renderForumBrowser() {
       const closed = e.currentTarget.dataset.closed === '1';
       this._toggleForumPostClosed(code, !closed);
     });
+  });
+  document.querySelectorAll('.forum-card-settings-btn').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.forum-card-settings-wrap.open').forEach(open => {
+        if (open !== e.currentTarget.parentElement) open.classList.remove('open');
+      });
+      e.currentTarget.parentElement?.classList.toggle('open');
+    });
+  });
+  document.querySelectorAll('.forum-card-settings-menu').forEach(el => {
+    el.addEventListener('click', (e) => e.stopPropagation());
   });
 },
 
