@@ -162,7 +162,9 @@ async switchChannel(code) {
     this.socket.emit('get-messages', { code });
     if (!isAnnouncementHub) {
       this.socket.emit('get-channel-members', { code });
-      this.socket.emit('request-voice-users', { code });
+      if (!this.voiceDisabled) {
+        this.socket.emit('request-voice-users', { code });
+      }
     } else {
       this.channelMembers = [];
     }
@@ -297,6 +299,7 @@ _renderForumBrowser() {
 
   document.querySelectorAll('.forum-card, .forum-card-open').forEach(el => {
     el.addEventListener('click', (e) => {
+      if (e.target.closest('.forum-card-actions, .forum-card-settings-wrap')) return;
       const code = el.dataset.code || e.currentTarget.dataset.code;
       if (!code) return;
       e.stopPropagation();
