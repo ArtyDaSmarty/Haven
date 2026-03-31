@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════
 // Haven — Main Client Application
-// Features: chat, voice, themes, images, multi-server,
+// Features: chat, themes, images, multi-server,
 //           notifications, volume sliders, status bar
 // ═══════════════════════════════════════════════════════════
 
@@ -11,7 +11,6 @@ import ContextMethods  from './modules/app-context.js?v=2.7.2';
 import ChannelMethods  from './modules/app-channels.js?v=2.7.8';
 import MessageMethods  from './modules/app-messages.js?v=2.7.10';
 import UserMethods     from './modules/app-users.js?v=2.7.0';
-import VoiceMethods    from './modules/app-voice.js?v=2.7.10';
 import UtilityMethods  from './modules/app-utilities.js?v=2.7.9';
 import AdminMethods    from './modules/app-admin.js?v=2.7.0';
 import PlatformMethods from './modules/app-platform.js?v=2.7.8';
@@ -282,7 +281,6 @@ Object.assign(HavenApp.prototype,
   ChannelMethods,
   MessageMethods,
   UserMethods,
-  VoiceMethods,
   UtilityMethods,
   AdminMethods,
   PlatformMethods,
