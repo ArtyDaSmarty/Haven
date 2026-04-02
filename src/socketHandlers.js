@@ -6,9 +6,7 @@ const bcrypt = require('bcryptjs');
 const webpush = require('web-push');
 const { sendFcm, isFcmEnabled } = require('./fcm');
 const { DATA_DIR, UPLOADS_DIR, DELETED_ATTACHMENTS_DIR } = require('./paths');
-const { deleteUploadByName } = require('./storage');
 const HAVEN_VERSION = require('../package.json').version;
-const VOICE_CHAT_ENABLED = false;
 
 // ── Normalize SQLite timestamps to UTC ISO 8601 ────────
 // SQLite CURRENT_TIMESTAMP produces UTC without 'Z' suffix;
@@ -83,11 +81,7 @@ async function resolveSpotifyToYouTube(spotifyUrl) {
     for (const q of queries) {
       const results = await searchYouTube(q, 1);
       if (results.length > 0) {
-        return {
-          url: `https://www.youtube.com/watch?v=${results[0].videoId}`,
-          title,
-          duration: results[0].duration || ''
-        };
+        return `https://www.youtube.com/watch?v=${results[0].videoId}`;
       }
     }
     return null;
@@ -196,18 +190,6 @@ async function searchYouTube(query, count = 5, offset = 0) {
     return [];
   }
 }
-
-// All recognized role permissions. Any permission sent by a client that is not here is silently rejected.
-const VALID_ROLE_PERMS = [
-  'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
-  'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
-  'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
-  'create_channel', 'create_forum_posts', 'upload_files', 'use_voice', 'use_tts',
-  'manage_webhooks', 'mention_everyone', 'view_history', 'view_all_members',
-  'manage_emojis', 'manage_soundboard', 'manage_music_queue',
-  'promote_user', 'transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'
-];
-
 function setupSocketHandlers(io, db) {
   const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
 
@@ -227,38 +209,18 @@ function setupSocketHandlers(io, db) {
     return [channelId];
   }
 
-  function getChannelServerId(channelId) {
-    if (!channelId) return null;
-    const row = db.prepare('SELECT server_id FROM channels WHERE id = ?').get(channelId);
-    return row?.server_id || null;
-  }
-
   function getUserEffectiveLevel(userId, channelId = null) {
     // Admin is always level 100
     const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
     if (user && user.is_admin) return 100;
 
-    const serverId = getChannelServerId(channelId);
-
-    // Big-instance roles apply everywhere.
-    const instanceRole = db.prepare(`
+    // Check server-scoped roles first (highest level wins, using custom_level if set)
+    const serverRole = db.prepare(`
       SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
       JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = ? AND r.scope = 'server' AND r.is_cosmetic = 0 AND ur.channel_id IS NULL AND ur.server_id IS NULL
+      WHERE ur.user_id = ? AND r.scope = 'server' AND ur.channel_id IS NULL
     `).get(userId);
-    let level = (instanceRole && instanceRole.maxLevel) || 0;
-
-    // Sub-server roles apply across every channel in that pseudo-server.
-    if (serverId) {
-      const subserverRole = db.prepare(`
-        SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
-        JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = ? AND r.scope = 'server' AND r.is_cosmetic = 0 AND ur.channel_id IS NULL AND ur.server_id = ?
-      `).get(userId, serverId);
-      if (subserverRole?.maxLevel && subserverRole.maxLevel > level) {
-        level = subserverRole.maxLevel;
-      }
-    }
+    let level = (serverRole && serverRole.maxLevel) || 0;
 
     // If channel specified, check roles for the channel + parent (inheritance)
     if (channelId) {
@@ -268,7 +230,7 @@ function setupSocketHandlers(io, db) {
         const channelRole = db.prepare(`
           SELECT MAX(COALESCE(ur.custom_level, r.level)) as maxLevel FROM roles r
           JOIN user_roles ur ON r.id = ur.role_id
-          WHERE ur.user_id = ? AND r.is_cosmetic = 0 AND ur.channel_id IN (${placeholders})
+          WHERE ur.user_id = ? AND ur.channel_id IN (${placeholders})
         `).get(userId, ...chain);
         if (channelRole && channelRole.maxLevel && channelRole.maxLevel > level) {
           level = channelRole.maxLevel;
@@ -292,32 +254,10 @@ function setupSocketHandlers(io, db) {
 
     // Check per-user permission overrides first (explicit deny takes priority)
     try {
-      const serverId = getChannelServerId(channelId);
-      let override = null;
-      if (channelId) {
-        override = db.prepare(`
-          SELECT allowed
-          FROM user_role_perms
-          WHERE user_id = ? AND permission = ? AND channel_id = ?
-          ORDER BY allowed ASC LIMIT 1
-        `).get(userId, permission, channelId);
-      }
-      if (!override && serverId) {
-        override = db.prepare(`
-          SELECT allowed
-          FROM user_role_perms
-          WHERE user_id = ? AND permission = ? AND channel_id IS NULL AND server_id = ?
-          ORDER BY allowed ASC LIMIT 1
-        `).get(userId, permission, serverId);
-      }
-      if (!override) {
-        override = db.prepare(`
-          SELECT allowed
-          FROM user_role_perms
-          WHERE user_id = ? AND permission = ? AND channel_id IS NULL AND server_id IS NULL
-          ORDER BY allowed ASC LIMIT 1
-        `).get(userId, permission);
-      }
+      const override = db.prepare(`
+        SELECT allowed FROM user_role_perms WHERE user_id = ? AND permission = ?
+        ORDER BY allowed ASC LIMIT 1
+      `).get(userId, permission);
       if (override) {
         if (override.allowed === 0) return false;
         if (override.allowed === 1) return true;
@@ -327,33 +267,19 @@ function setupSocketHandlers(io, db) {
     // Check level-based permission thresholds
     const thresholds = getPermissionThresholds();
     if (thresholds[permission]) {
-      const level = getUserEffectiveLevel(userId, channelId);
+      const level = getUserEffectiveLevel(userId);
       if (level >= thresholds[permission]) return true;
     }
 
-    // Check big-instance roles
-    const instancePerm = db.prepare(`
+    // Check server-scoped roles
+    const serverPerm = db.prepare(`
       SELECT rp.allowed FROM role_permissions rp
       JOIN roles r ON rp.role_id = r.id
       JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = ? AND rp.permission = ? AND r.scope = 'server'
-        AND ur.channel_id IS NULL AND ur.server_id IS NULL AND rp.allowed = 1
+      WHERE ur.user_id = ? AND rp.permission = ? AND r.scope = 'server' AND ur.channel_id IS NULL AND rp.allowed = 1
       LIMIT 1
     `).get(userId, permission);
-    if (instancePerm) return true;
-
-    const serverId = getChannelServerId(channelId);
-    if (serverId) {
-      const subserverPerm = db.prepare(`
-        SELECT rp.allowed FROM role_permissions rp
-        JOIN roles r ON rp.role_id = r.id
-        JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = ? AND rp.permission = ? AND r.scope = 'server'
-          AND ur.channel_id IS NULL AND ur.server_id = ? AND rp.allowed = 1
-        LIMIT 1
-      `).get(userId, permission, serverId);
-      if (subserverPerm) return true;
-    }
+    if (serverPerm) return true;
 
     // Check channel-scoped roles (with inheritance: parent channel roles cascade to subs)
     if (channelId) {
@@ -371,46 +297,6 @@ function setupSocketHandlers(io, db) {
       }
     }
     return false;
-  }
-
-  function userHasServerPermission(userId, permission, serverId = null) {
-    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
-    if (user?.is_admin) return true;
-
-    if (!serverId) return userHasPermission(userId, permission);
-
-    try {
-      const override = db.prepare(`
-        SELECT allowed
-        FROM user_role_perms
-        WHERE user_id = ? AND permission = ? AND channel_id IS NULL AND (server_id = ? OR server_id IS NULL)
-        ORDER BY CASE WHEN server_id = ? THEN 0 ELSE 1 END, allowed ASC
-        LIMIT 1
-      `).get(userId, permission, serverId, serverId);
-      if (override) {
-        if (override.allowed === 0) return false;
-        if (override.allowed === 1) return true;
-      }
-    } catch {}
-
-    const thresholds = getPermissionThresholds();
-    if (thresholds[permission]) {
-      const level = getUserEffectiveLevel(userId, db.prepare('SELECT id FROM channels WHERE server_id = ? AND is_dm = 0 ORDER BY id LIMIT 1').get(serverId)?.id || null);
-      if (level >= thresholds[permission]) return true;
-    }
-
-    const scopedPerm = db.prepare(`
-      SELECT 1
-      FROM role_permissions rp
-      JOIN roles r ON rp.role_id = r.id
-      JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = ? AND rp.permission = ? AND r.scope = 'server'
-        AND ur.channel_id IS NULL
-        AND (ur.server_id = ? OR ur.server_id IS NULL)
-        AND rp.allowed = 1
-      LIMIT 1
-    `).get(userId, permission, serverId);
-    return !!scopedPerm;
   }
 
   function getUserPermissions(userId) {
@@ -450,118 +336,26 @@ function setupSocketHandlers(io, db) {
 
   function getUserRoles(userId) {
     return db.prepare(`
-      SELECT r.id, r.name, COALESCE(ur.custom_level, r.level) AS level, r.scope, r.color, r.is_cosmetic, ur.server_id, ur.channel_id
+      SELECT r.id, r.name, r.level, r.scope, r.color, ur.channel_id
       FROM roles r
       JOIN user_roles ur ON r.id = ur.role_id
       WHERE ur.user_id = ?
-      GROUP BY r.id, COALESCE(ur.server_id, -1), COALESCE(ur.channel_id, -1)
-      ORDER BY COALESCE(ur.custom_level, r.level) DESC
+      GROUP BY r.id, COALESCE(ur.channel_id, -1)
+      ORDER BY r.level DESC
     `).all(userId);
-  }
-
-  function canModerateUserProxies(viewerId) {
-    const viewer = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(viewerId);
-    if (viewer?.is_admin) return true;
-    return getUserEffectiveLevel(viewerId) >= 25;
-  }
-
-  function getVisibleProxiesForUser(targetUserId, viewerId) {
-    const canViewPrivate = targetUserId === viewerId || canModerateUserProxies(viewerId);
-    const rows = db.prepare(`
-      SELECT id, user_id, name, proxy_type, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public, created_at, updated_at
-      FROM proxies
-      WHERE user_id = ?
-        AND (? = 1 OR is_public = 1)
-      ORDER BY COALESCE(NULLIF(group_name, ''), 'Ungrouped') COLLATE NOCASE ASC,
-               name COLLATE NOCASE ASC,
-               id ASC
-    `).all(targetUserId, canViewPrivate ? 1 : 0);
-    return rows.map(row => ({
-      id: row.id,
-      userId: row.user_id,
-      name: row.name,
-      proxyType: row.proxy_type || 'alter',
-      bio: row.bio || '',
-      avatarUrl: row.avatar_url || null,
-      triggerPrefix: row.trigger_prefix,
-      triggerSuffix: row.trigger_suffix || '',
-      groupName: row.group_name || '',
-      isPublic: !!row.is_public,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    }));
-  }
-
-  function getProxySummary(targetUserId, viewerId) {
-    const canViewPrivate = targetUserId === viewerId || canModerateUserProxies(viewerId);
-    const counts = db.prepare(`
-      SELECT
-        SUM(CASE WHEN is_public = 1 THEN 1 ELSE 0 END) AS public_count,
-        SUM(CASE WHEN is_public = 0 THEN 1 ELSE 0 END) AS private_count
-      FROM proxies
-      WHERE user_id = ?
-    `).get(targetUserId) || {};
-    return {
-      proxyCount: canViewPrivate
-        ? Number(counts.public_count || 0) + Number(counts.private_count || 0)
-        : Number(counts.public_count || 0),
-      hiddenProxyCount: canViewPrivate ? 0 : Number(counts.private_count || 0),
-      canViewPrivate
-    };
-  }
-
-  function findMatchingProxy(userId, rawContent) {
-    const trimmed = typeof rawContent === 'string' ? rawContent.trim() : '';
-    if (!trimmed) return null;
-    const proxies = db.prepare(`
-      SELECT id, name, proxy_type, avatar_url, trigger_prefix, trigger_suffix
-      FROM proxies
-      WHERE user_id = ?
-      ORDER BY LENGTH(trigger_prefix) DESC, LENGTH(trigger_suffix) DESC, id ASC
-    `).all(userId);
-    for (const proxy of proxies) {
-      const prefix = proxy.trigger_prefix || '';
-      const suffix = proxy.trigger_suffix || '';
-      if (!prefix) continue;
-      if (!trimmed.startsWith(prefix)) continue;
-      if (suffix && !trimmed.endsWith(suffix)) continue;
-      const endIndex = suffix ? trimmed.length - suffix.length : trimmed.length;
-      const body = trimmed.slice(prefix.length, endIndex).trim();
-      if (!body) continue;
-      return {
-        id: proxy.id,
-        name: proxy.name,
-        proxyType: proxy.proxy_type || 'alter',
-        avatar: proxy.avatar_url || null,
-        content: body
-      };
-    }
-    return null;
   }
 
   function getUserHighestRole(userId, channelId = null) {
     const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
     if (user && user.is_admin) return { name: 'Admin', level: 100, color: '#e74c3c' };
 
-    const serverId = getChannelServerId(channelId);
-
-    // Big-instance roles
+    // Server-scoped roles (also catches channel-scope roles assigned without a channel_id)
     let role = db.prepare(`
       SELECT r.name, COALESCE(ur.custom_level, r.level) as level, r.color FROM roles r
       JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = ? AND ur.channel_id IS NULL AND ur.server_id IS NULL
+      WHERE ur.user_id = ? AND ur.channel_id IS NULL
       ORDER BY COALESCE(ur.custom_level, r.level) DESC LIMIT 1
     `).get(userId);
-
-    if (serverId) {
-      const subserverRole = db.prepare(`
-        SELECT r.name, COALESCE(ur.custom_level, r.level) as level, r.color FROM roles r
-        JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = ? AND ur.channel_id IS NULL AND ur.server_id = ?
-        ORDER BY COALESCE(ur.custom_level, r.level) DESC LIMIT 1
-      `).get(userId, serverId);
-      if (subserverRole && (!role || subserverRole.level > role.level)) role = subserverRole;
-    }
 
     if (channelId) {
       const chain = getChannelRoleChain(channelId);
@@ -577,83 +371,6 @@ function setupSocketHandlers(io, db) {
       }
     }
     return role || null;
-  }
-
-  function generateServerCode() {
-    let code;
-    do {
-      code = crypto.randomBytes(4).toString('hex');
-    } while (db.prepare('SELECT 1 FROM servers WHERE code = ?').get(code));
-    return code;
-  }
-
-  function getMainServer() {
-    return db.prepare("SELECT * FROM servers WHERE is_legacy_main = 1 OR name = 'Main' ORDER BY is_legacy_main DESC, id LIMIT 1").get();
-  }
-
-  function getVisibleServers(userId, isAdmin) {
-    if (isAdmin) {
-      return db.prepare(`
-        SELECT s.id, s.name, s.code, s.icon_url, s.home_channel_id, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
-               (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
-        FROM servers s
-        ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
-      `).all();
-    }
-
-    return db.prepare(`
-      SELECT DISTINCT s.id, s.name, s.code, s.icon_url, s.home_channel_id, s.theme, s.theme_force_override, s.created_by, s.created_at, s.position,
-             (SELECT COUNT(*) FROM channels c WHERE c.server_id = s.id AND c.is_dm = 0) AS channel_count
-      FROM servers s
-      JOIN channels c ON c.server_id = s.id AND c.is_dm = 0
-      JOIN channel_members cm ON cm.channel_id = c.id
-      WHERE cm.user_id = ?
-      ORDER BY CASE WHEN s.name = 'Main' THEN 0 ELSE 1 END, s.position ASC, s.name COLLATE NOCASE ASC
-    `).all(userId);
-  }
-
-  function getServerByIdForUser(serverId, userId, isAdmin) {
-    if (!serverId) return null;
-    const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
-    if (!server) return null;
-    if (isAdmin) return server;
-    const visible = db.prepare(`
-      SELECT 1
-      FROM channels c
-      JOIN channel_members cm ON cm.channel_id = c.id
-      WHERE c.server_id = ? AND c.is_dm = 0 AND cm.user_id = ?
-      LIMIT 1
-    `).get(serverId, userId);
-    return visible ? server : null;
-  }
-
-  function emitServersList(targetSocket) {
-    if (!targetSocket?.user) return;
-    targetSocket.emit('servers-list', getVisibleServers(targetSocket.user.id, targetSocket.user.isAdmin));
-  }
-
-  function getBlockedUserIds(userId) {
-    return db.prepare('SELECT blocked_user_id FROM user_blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
-  }
-
-  function getMutedUserIds(userId) {
-    return db.prepare('SELECT muted_user_id FROM user_mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
-  }
-
-  function hasUserBlocked(userId, otherUserId) {
-    return !!db.prepare('SELECT 1 FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?').get(userId, otherUserId);
-  }
-
-  function getServerMute(userId, serverId) {
-    if (!serverId) return null;
-    return db.prepare(
-      "SELECT expires_at FROM server_mutes WHERE server_id = ? AND user_id = ? AND expires_at > datetime('now') ORDER BY expires_at DESC LIMIT 1"
-    ).get(serverId, userId);
-  }
-
-  function isServerBanned(userId, serverId) {
-    if (!serverId) return false;
-    return !!db.prepare('SELECT 1 FROM server_bans WHERE server_id = ? AND user_id = ?').get(serverId, userId);
   }
 
   // ── Socket connection rate limiting (per IP) ────────────
@@ -717,14 +434,12 @@ function setupSocketHandlers(io, db) {
       socket.user.avatar = (uRow && uRow.avatar) ? uRow.avatar : null;
       socket.user.avatar_shape = (uRow && uRow.avatar_shape) ? uRow.avatar_shape : 'circle';
       if (uRow) {
-        // Bootstrap admin from ADMIN_USERNAME env only when NO admin exists
-        // (first run or recovery). Prevents overriding explicit admin transfers.
-        const anyAdmin = db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
-        if (!anyAdmin && uRow.username.toLowerCase() === ADMIN_USERNAME && !uRow.is_admin) {
-          db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id);
-          uRow.is_admin = 1;
+        // Sync admin status from .env (handles ADMIN_USERNAME changes)
+        const shouldBeAdmin = uRow.username.toLowerCase() === ADMIN_USERNAME ? 1 : 0;
+        if (uRow.is_admin !== shouldBeAdmin) {
+          db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(shouldBeAdmin, user.id);
         }
-        socket.user.isAdmin = !!uRow.is_admin;
+        socket.user.isAdmin = !!shouldBeAdmin;
       }
     } catch {
       socket.user.displayName = user.displayName || user.username;
@@ -978,8 +693,6 @@ function setupSocketHandlers(io, db) {
       roles: socket.user.roles || [],
       effectiveLevel: socket.user.effectiveLevel || 0,
       permissions: getUserPermissions(socket.user.id),
-      blockedUserIds: getBlockedUserIds(socket.user.id),
-      mutedUserIds: getMutedUserIds(socket.user.id),
       status: socket.user.status || 'online',
       statusText: socket.user.statusText || ''
     });
@@ -987,12 +700,10 @@ function setupSocketHandlers(io, db) {
     // Send current voice counts so sidebar indicators are correct on connect
     for (const [code, room] of voiceUsers) {
       if (room.size > 0) {
-        const users = Array.from(room.values()).map(u => ({ id: u.id, username: u.username, isMuted: u.isMuted || false, isDeafened: u.isDeafened || false }));
+        const users = Array.from(room.values()).map(u => ({ id: u.id, username: u.username }));
         socket.emit('voice-count-update', { code, count: room.size, users });
       }
     }
-
-    emitServersList(socket);
 
     // ── Per-socket flood protection ─────────────────────────
     const floodBuckets = { message: [], event: [] };
@@ -1037,31 +748,23 @@ function setupSocketHandlers(io, db) {
 
     // ── Helper: get enriched channel list for a user ───────
     function getEnrichedChannels(userId, isAdmin, joinRooms) {
-      try {
-        const announcements = db.prepare("SELECT id FROM channels WHERE special_section = 'announcements' LIMIT 1").get();
-        if (announcements?.id) {
-          db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(announcements.id, userId);
-        }
-      } catch { /* non-critical */ }
       let channels;
       if (isAdmin) {
         // Admins see ALL non-DM channels plus their own DMs
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
+          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate,
-                 c.is_closed, c.closed_at
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
           FROM channels c
           WHERE c.is_dm = 0
           UNION
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
+          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate,
-                 c.is_closed, c.closed_at
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
           FROM channels c
           JOIN channel_members cm ON c.id = cm.channel_id
           WHERE cm.user_id = ? AND c.is_dm = 1
@@ -1074,25 +777,16 @@ function setupSocketHandlers(io, db) {
         });
       } else {
         channels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.server_id, c.created_by, c.topic, c.is_dm, c.special_section,
+          SELECT c.id, c.name, c.code, c.created_by, c.topic, c.is_dm,
                  c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
                  c.parent_channel_id, c.position, c.is_private, c.expires_at,
                  c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate,
-                 c.is_closed, c.closed_at
+                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled
           FROM channels c
           JOIN channel_members cm ON c.id = cm.channel_id
           WHERE cm.user_id = ?
-            AND (
-              c.is_dm = 1
-              OR c.server_id IS NULL
-              OR NOT EXISTS (
-                SELECT 1 FROM server_bans sb
-                WHERE sb.user_id = ? AND sb.server_id = c.server_id
-              )
-            )
           ORDER BY c.is_dm, c.position, c.name
-        `).all(userId, userId);
+        `).all(userId);
       }
 
       if (channels.length > 0) {
@@ -1168,7 +862,6 @@ function setupSocketHandlers(io, db) {
         for (const [, s] of io.sockets.sockets) {
           if (s.user) {
             s.emit('channels-list', getEnrichedChannels(s.user.id, s.user.isAdmin, null));
-            emitServersList(s);
           }
         }
       }, 150); // 150ms debounce — batches rapid channel mutations
@@ -1200,107 +893,10 @@ function setupSocketHandlers(io, db) {
       socket.emit('channels-list', channels);
     });
 
-    socket.on('get-servers', () => {
-      emitServersList(socket);
-    });
-
-    socket.on('create-server', (data, callback) => {
-      const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_server')) {
-        return cb({ error: 'You do not have permission to create servers' });
-      }
-      if (!data || typeof data !== 'object') return cb({ error: 'Invalid request' });
-      const name = typeof data.name === 'string' ? data.name.trim() : '';
-      if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
-
-      try {
-        const result = db.prepare(
-          'INSERT INTO servers (name, code, icon_url, theme, theme_force_override, created_by, position) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(
-          name,
-          generateServerCode(),
-          String(data.iconUrl || '').trim(),
-          String(data.theme || '').trim(),
-          data.themeForceOverride ? 1 : 0,
-          socket.user.id,
-          Number(db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS nextPos FROM servers').get()?.nextPos || 1)
-        );
-
-        const serverId = result.lastInsertRowid;
-        const generalCode = generateChannelCode();
-        const channelResult = db.prepare(
-          'INSERT INTO channels (name, code, server_id, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, 0, NULL, ?, 1, 1, 1)'
-        ).run('general', generalCode, serverId, socket.user.id, 'standard');
-        db.prepare('UPDATE servers SET home_channel_id = ? WHERE id = ?').run(channelResult.lastInsertRowid, serverId);
-        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(channelResult.lastInsertRowid, socket.user.id);
-
-        broadcastChannelLists();
-        cb({ ok: true, serverId, defaultChannelCode: generalCode });
-      } catch (err) {
-        console.error('Create server error:', err);
-        cb({ error: 'Failed to create server' });
-      }
-    });
-
-    socket.on('update-subserver', (data, callback) => {
-      const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
-        return cb({ error: 'You do not have permission to edit servers' });
-      }
-      if (!data || typeof data !== 'object') return cb({ error: 'Invalid request' });
-      const serverId = Number(data.serverId);
-      if (!serverId) return cb({ error: 'Invalid server' });
-      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
-      if (!server) return cb({ error: 'Server not found' });
-      const name = typeof data.name === 'string' ? data.name.trim() : '';
-      const iconUrl = typeof data.iconUrl === 'string' ? data.iconUrl.trim() : '';
-      const theme = typeof data.theme === 'string' ? data.theme.trim() : '';
-      const themeForceOverride = data.themeForceOverride ? 1 : 0;
-      const homeChannelId = Number.isInteger(Number(data.homeChannelId)) && Number(data.homeChannelId) > 0 ? Number(data.homeChannelId) : null;
-      if (!name || name.length > 30) return cb({ error: 'Server name must be 1-30 characters' });
-      if (homeChannelId) {
-        const homeChannel = db.prepare('SELECT id FROM channels WHERE id = ? AND server_id = ? AND is_dm = 0 AND special_section IS NULL').get(homeChannelId, serverId);
-        if (!homeChannel) return cb({ error: 'Invalid home channel' });
-      }
-
-      try {
-        db.prepare('UPDATE servers SET name = ?, icon_url = ?, theme = ?, theme_force_override = ?, home_channel_id = ? WHERE id = ?').run(name, iconUrl, theme, themeForceOverride, homeChannelId, serverId);
-        emitServersList(socket);
-        broadcastChannelLists();
-        cb({ ok: true });
-      } catch (err) {
-        console.error('Update subserver error:', err);
-        cb({ error: 'Failed to update server' });
-      }
-    });
-
-    socket.on('delete-server', (data, callback) => {
-      const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_server')) {
-        return cb({ error: 'You do not have permission to delete servers' });
-      }
-      const serverId = Number(data?.serverId);
-      if (!serverId) return cb({ error: 'Invalid server' });
-      const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
-      if (!server) return cb({ error: 'Server not found' });
-      if (server.name === 'Main') return cb({ error: 'Main cannot be deleted' });
-
-      try {
-        db.prepare('DELETE FROM channels WHERE server_id = ?').run(serverId);
-        db.prepare('DELETE FROM servers WHERE id = ?').run(serverId);
-        broadcastChannelLists();
-        cb({ ok: true });
-      } catch (err) {
-        console.error('Delete server error:', err);
-        cb({ error: 'Failed to delete server' });
-      }
-    });
-
     // ── Create channel (permission-based) ─────────────────
     socket.on('create-channel', (data) => {
       if (!data || typeof data !== 'object') return;
-      const requestedServerId = Number(data.serverId);
-      if (!userHasServerPermission(socket.user.id, 'create_channel', Number.isInteger(requestedServerId) ? requestedServerId : null)) {
+      if (!userHasPermission(socket.user.id, 'create_channel')) {
         return socket.emit('error-msg', 'You don\'t have permission to create channels');
       }
 
@@ -1312,19 +908,12 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Channel name too long (max 50)');
       }
       // Only allow safe characters in channel names
-      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
+      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
         return socket.emit('error-msg', 'Channel name contains invalid characters');
       }
 
       const code = generateChannelCode();
-      const channelType = data.channelType === 'forum' ? 'forum' : 'standard';
       const isPrivate = data.isPrivate ? 1 : 0;
-      const targetServer = getServerByIdForUser(requestedServerId, socket.user.id, socket.user.isAdmin)
-        || getVisibleServers(socket.user.id, socket.user.isAdmin)[0]
-        || getMainServer();
-      if (!targetServer?.id) {
-        return socket.emit('error-msg', 'No server available for this channel');
-      }
 
       // Optional temporary channel: duration in hours (1–720 = 30 days max)
       let expiresAt = null;
@@ -1337,19 +926,8 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO channels (name, code, server_id, created_by, is_private, expires_at, channel_type, text_enabled, media_enabled, voice_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(
-          name.trim(),
-          code,
-          targetServer.id,
-          socket.user.id,
-          isPrivate,
-          expiresAt,
-          channelType,
-          1,
-          1,
-          channelType === 'forum' ? 0 : 1
-        );
+          'INSERT INTO channels (name, code, created_by, is_private, expires_at) VALUES (?, ?, ?, ?, ?)'
+        ).run(name.trim(), code, socket.user.id, isPrivate, expiresAt);
 
         // Auto-join creator
         db.prepare(
@@ -1374,17 +952,12 @@ function setupSocketHandlers(io, db) {
           id: result.lastInsertRowid,
           name: name.trim(),
           code,
-          server_id: targetServer.id,
           display_code: code, // Creator always sees the real code
           created_by: socket.user.id,
           topic: '',
           is_dm: 0,
           is_private: isPrivate,
-          expires_at: expiresAt,
-          channel_type: channelType,
-          text_enabled: 1,
-          media_enabled: 1,
-          voice_enabled: channelType === 'forum' ? 0 : 1
+          expires_at: expiresAt
         };
 
         socket.join(`channel:${code}`);
@@ -1403,33 +976,39 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Invalid channel code format');
       }
 
-      // ── Check if this is a sub-server invite code ─────
-      const serverInvite = db.prepare('SELECT * FROM servers WHERE code = ?').get(code);
-      if (serverInvite) {
-        if (!socket.user.isAdmin && isServerBanned(socket.user.id, serverInvite.id)) {
-          return socket.emit('error-msg', 'You are banned from that server');
-        }
-        const homeChannel = (serverInvite.home_channel_id
-          ? db.prepare('SELECT id, code FROM channels WHERE id = ? AND server_id = ? AND is_dm = 0 AND special_section IS NULL').get(serverInvite.home_channel_id, serverInvite.id)
-          : null)
-          || db.prepare('SELECT id, code FROM channels WHERE server_id = ? AND parent_channel_id IS NULL AND is_dm = 0 AND special_section IS NULL ORDER BY position, id LIMIT 1').get(serverInvite.id);
-        if (!homeChannel) return socket.emit('error-msg', 'This server does not have a home channel yet');
-        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(homeChannel.id, socket.user.id);
-        socket.join(`channel:${homeChannel.code}`);
+      // ── Check if this is a server-wide invite code ─────
+      const serverCodeRow = db.prepare("SELECT value FROM server_settings WHERE key = 'server_code'").get();
+      if (serverCodeRow && serverCodeRow.value && serverCodeRow.value === code) {
+        // Server code: add user to ALL top-level non-DM channels and their non-private sub-channels
+        const allParents = db.prepare('SELECT id, code FROM channels WHERE parent_channel_id IS NULL AND is_dm = 0').all();
+        const insertMember = db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)');
+        let joinedCount = 0;
 
-        emitServersList(socket);
+        const txn = db.transaction(() => {
+          for (const parent of allParents) {
+            insertMember.run(parent.id, socket.user.id);
+            socket.join(`channel:${parent.code}`);
+            joinedCount++;
+            // Also add to non-private sub-channels
+            const subs = db.prepare('SELECT id, code FROM channels WHERE parent_channel_id = ? AND is_private = 0').all(parent.id);
+            for (const sub of subs) {
+              insertMember.run(sub.id, socket.user.id);
+              socket.join(`channel:${sub.code}`);
+              joinedCount++;
+            }
+          }
+        });
+        txn();
+
+        // Refresh their channel list
         socket.emit('channels-list', getEnrichedChannels(socket.user.id, socket.user.isAdmin, (room) => socket.join(room)));
-        socket.emit('server-joined', { serverId: serverInvite.id, firstChannelCode: homeChannel.code });
-        socket.emit('error-msg', `${serverInvite.name} joined`);
+        socket.emit('error-msg', `Server code accepted — joined ${joinedCount} channel${joinedCount !== 1 ? 's' : ''}`);
         return;
       }
 
       const channel = db.prepare('SELECT * FROM channels WHERE code = ?').get(code);
       if (!channel) {
         return socket.emit('error-msg', 'Invalid channel code — double-check it');
-      }
-      if (!socket.user.isAdmin && channel.server_id && isServerBanned(socket.user.id, channel.server_id)) {
-        return socket.emit('error-msg', 'You are banned from that server');
       }
 
       // Add membership if not already a member
@@ -1445,10 +1024,9 @@ function setupSocketHandlers(io, db) {
         // Auto-assign roles flagged as auto_assign to this user (if they don't already have them)
         try {
           const autoRoles = db.prepare('SELECT id FROM roles WHERE auto_assign = 1').all();
-          const mainServerId = getMainServer()?.id || null;
-          const insertAutoRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id, server_id, channel_id, granted_by) VALUES (?, ?, ?, NULL, NULL)');
+          const insertAutoRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id, channel_id, granted_by) VALUES (?, ?, NULL, NULL)');
           for (const ar of autoRoles) {
-            insertAutoRole.run(socket.user.id, ar.id, mainServerId);
+            insertAutoRole.run(socket.user.id, ar.id);
             applyRoleChannelAccess(ar.id, socket.user.id, 'grant');
           }
         } catch { /* non-critical */ }
@@ -1523,7 +1101,6 @@ function setupSocketHandlers(io, db) {
         id: channel.id,
         name: channel.name,
         code: activeCode,
-        server_id: channel.server_id || null,
         display_code: (isPrivateCode && !joinerCanSeeCode) ? '••••••••' : activeCode,
         created_by: channel.created_by,
         topic: channel.topic || '',
@@ -1647,7 +1224,7 @@ function setupSocketHandlers(io, db) {
       let messages;
       if (before) {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ? AND m.id < ?
@@ -1655,7 +1232,7 @@ function setupSocketHandlers(io, db) {
         `).all(channel.id, before, limit);
       } else if (after) {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ? AND m.id > ?
@@ -1663,7 +1240,7 @@ function setupSocketHandlers(io, db) {
         `).all(channel.id, after, limit);
       } else {
         messages = db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data, m.proxy_id, m.proxy_name, m.proxy_avatar, m.proxy_type,
+          SELECT m.id, m.content, m.created_at, m.reply_to, m.edited_at, m.is_webhook, m.webhook_username, m.webhook_avatar, m.imported_from, m.is_archived, m.poll_data,
                  COALESCE(m.webhook_username, u.display_name, u.username, '[Deleted User]') as username, u.id as user_id, u.avatar, COALESCE(u.avatar_shape, 'circle') as avatar_shape
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ?
@@ -1681,7 +1258,7 @@ function setupSocketHandlers(io, db) {
       if (replyIds.length > 0) {
         const ph = replyIds.map(() => '?').join(',');
         db.prepare(`
-          SELECT m.id, m.content, COALESCE(m.proxy_name, u.display_name, u.username, '[Deleted User]') as username
+          SELECT m.id, m.content, COALESCE(u.display_name, u.username, '[Deleted User]') as username
           FROM messages m LEFT JOIN users u ON m.user_id = u.id
           WHERE m.id IN (${ph})
         `).all(...replyIds).forEach(r => replyMap.set(r.id, r));
@@ -1719,22 +1296,6 @@ function setupSocketHandlers(io, db) {
         });
       }
 
-      // Batch-lookup current webhook avatars for webhook messages missing a stored avatar
-      const webhookAvatarMap = new Map();
-      const webhookNamesNeedingAvatar = [...new Set(
-        messages.filter(m => m.is_webhook && !m.webhook_avatar && m.webhook_username)
-          .map(m => m.webhook_username)
-      )];
-      if (webhookNamesNeedingAvatar.length > 0) {
-        const ph = webhookNamesNeedingAvatar.map(() => '?').join(',');
-        db.prepare(
-          `SELECT name, avatar_url FROM webhooks WHERE channel_id = ? AND name IN (${ph}) AND avatar_url IS NOT NULL`
-        ).all(channel.id, ...webhookNamesNeedingAvatar).forEach(w => {
-          webhookAvatarMap.set(w.name, w.avatar_url);
-        });
-      }
-
-      const blockedIds = new Set(getBlockedUserIds(socket.user.id));
       const enriched = messages.map(m => {
         const obj = { ...m };
         // Normalize SQLite UTC timestamps to proper ISO 8601 with Z suffix
@@ -1763,16 +1324,6 @@ function setupSocketHandlers(io, db) {
           obj.is_webhook = true;
           obj.username = `[BOT] ${m.webhook_username || 'Bot'}`;
           obj.avatar_shape = 'square';
-          // Use stored avatar, or fall back to the webhook's current avatar
-          obj.avatar = m.webhook_avatar || webhookAvatarMap.get(m.webhook_username) || null;
-        }
-        if (m.proxy_id && m.proxy_name) {
-          obj.proxy_id = m.proxy_id;
-          obj.proxy_name = m.proxy_name;
-          obj.proxy_avatar = m.proxy_avatar || null;
-          obj.proxy_type = m.proxy_type || 'alter';
-          obj.avatar = m.proxy_avatar || null;
-          obj.username = m.proxy_name;
         }
         // Flag imported messages (Discord, etc.)
         if (m.imported_from) {
@@ -1780,7 +1331,7 @@ function setupSocketHandlers(io, db) {
           obj.username = m.webhook_username || 'Unknown';
         }
         return obj;
-      }).filter(m => !m.user_id || !blockedIds.has(m.user_id));
+      });
 
       socket.emit('message-history', {
         channelCode: code,
@@ -1824,11 +1375,11 @@ function setupSocketHandlers(io, db) {
     socket.on('send-message', (data) => {
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
-      const rawContent = typeof data.content === 'string' ? data.content : '';
+      const content = typeof data.content === 'string' ? data.content : '';
 
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
-      if (!rawContent || rawContent.trim().length === 0) return;
-      if (rawContent.length > 2000) {
+      if (!content || content.trim().length === 0) return;
+      if (content.length > 2000) {
         return socket.emit('error-msg', 'Message too long (max 2000 characters)');
       }
 
@@ -1841,44 +1392,22 @@ function setupSocketHandlers(io, db) {
       const activeMute = db.prepare(
         'SELECT id, expires_at FROM mutes WHERE user_id = ? AND expires_at > datetime(\'now\') ORDER BY expires_at DESC LIMIT 1'
       ).get(socket.user.id);
-      const channel = db.prepare('SELECT id, name, slow_mode_interval, text_enabled, voice_enabled, media_enabled, special_section, is_dm, server_id, parent_channel_id, is_closed FROM channels WHERE code = ?').get(code);
-      if (activeMute && channel && !channel.is_dm) {
+      if (activeMute) {
         const remaining = Math.ceil((new Date(activeMute.expires_at + 'Z') - Date.now()) / 60000);
         return socket.emit('error-msg', `You are muted for ${remaining} more minute${remaining !== 1 ? 's' : ''}`);
       }
-      const serverMute = channel ? getServerMute(socket.user.id, channel.server_id) : null;
-      if (serverMute && !channel.is_dm) {
-        const remaining = Math.ceil((new Date(serverMute.expires_at + 'Z') - Date.now()) / 60000);
-        return socket.emit('error-msg', `You are server-muted for ${remaining} more minute${remaining !== 1 ? 's' : ''}`);
-      }
-      if (!channel) return socket.emit('error-msg', 'Channel not found — try switching channels and back');
+
+      const channel = db.prepare('SELECT id, name, slow_mode_interval, text_enabled, voice_enabled, media_enabled FROM channels WHERE code = ?').get(code);
+      if (!channel) return;
 
       const member = db.prepare(
         'SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?'
       ).get(channel.id, socket.user.id);
       if (!member) return socket.emit('error-msg', 'Not a member of this channel');
-      if (channel.is_dm) {
-        const otherMember = db.prepare('SELECT user_id FROM channel_members WHERE channel_id = ? AND user_id != ? LIMIT 1').get(channel.id, socket.user.id);
-        if (otherMember && (hasUserBlocked(socket.user.id, otherMember.user_id) || hasUserBlocked(otherMember.user_id, socket.user.id))) {
-          return socket.emit('error-msg', 'You cannot message this user');
-        }
-      }
-      if (channel.special_section === 'announcements'
-        && !socket.user.isAdmin
-        && !userHasServerPermission(socket.user.id, 'manage_server', channel.server_id)
-        && !userHasPermission(socket.user.id, 'create_channel', channel.id)) {
-        return socket.emit('error-msg', 'You do not have permission to post in Admin Announcements');
-      }
-      if (channel.is_closed && channel.parent_channel_id) {
-        const parent = db.prepare('SELECT channel_type FROM channels WHERE id = ?').get(channel.parent_channel_id);
-        if (parent?.channel_type === 'forum') {
-          return socket.emit('error-msg', 'This forum post is closed');
-        }
-      }
 
       // Block text messages when text is disabled (allow media uploads if media is enabled)
       if (channel.text_enabled === 0) {
-        const isMedia = /^\/uploads\b/i.test(rawContent.trim()) || /^\[file:[^\]]+\]\(/i.test(rawContent.trim());
+        const isMedia = /^\/uploads\b/i.test(content.trim()) || /^\[file:[^\]]+\]\(/i.test(content.trim());
         if (!isMedia || channel.media_enabled === 0) {
           return socket.emit('error-msg', 'Text messages are disabled in this channel');
         }
@@ -1886,7 +1415,7 @@ function setupSocketHandlers(io, db) {
 
       // Block media uploads if media is disabled in this channel
       if (channel.media_enabled === 0 && !socket.user.isAdmin) {
-        const isMediaContent = /^\/uploads\b/i.test(rawContent.trim()) || /^\[file:[^\]]+\]\(/i.test(rawContent.trim());
+        const isMediaContent = /^\/uploads\b/i.test(content.trim()) || /^\[file:[^\]]+\]\(/i.test(content.trim());
         if (isMediaContent) {
           return socket.emit('error-msg', 'Media uploads are disabled in this channel');
         }
@@ -1907,13 +1436,11 @@ function setupSocketHandlers(io, db) {
 
       // ── Slash commands ────────────────────────────────
       // Skip slash command parsing for image uploads and file paths
-      const trimmed = rawContent.trim();
+      const trimmed = content.trim();
       const isImage = data.isImage === true;
       const isUpload = /^\/uploads\b/i.test(trimmed);
       const isPath = trimmed.startsWith('/') && trimmed.indexOf('/', 1) !== -1;
-      const proxyMatch = (!isImage && !isUpload && !isPath) ? findMatchingProxy(socket.user.id, rawContent) : null;
-      const messageText = proxyMatch ? proxyMatch.content : trimmed;
-      const slashMatch = (!proxyMatch && !isImage && !isUpload && !isPath) ? trimmed.match(/^\/([a-zA-Z]+)(?:\s+(.*))?$/) : null;
+      const slashMatch = (!isImage && !isUpload && !isPath) ? trimmed.match(/^\/([a-zA-Z]+)(?:\s+(.*))?$/) : null;
       if (slashMatch) {
         const cmd = slashMatch[1].toLowerCase();
         const arg = (slashMatch[2] || '').trim();
@@ -1922,8 +1449,8 @@ function setupSocketHandlers(io, db) {
           const finalContent = slashResult.content;
 
           const result = db.prepare(
-            'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar, proxy_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-          ).run(channel.id, socket.user.id, finalContent, null, null, null, null, null);
+            'INSERT INTO messages (channel_id, user_id, content, reply_to) VALUES (?, ?, ?, ?)'
+          ).run(channel.id, socket.user.id, finalContent, null);
 
           const message = {
             id: result.lastInsertRowid,
@@ -1961,38 +1488,32 @@ function setupSocketHandlers(io, db) {
       const replyTo = isInt(data.replyTo) ? data.replyTo : null;
 
       // Server-side sanitization (defense-in-depth — client also escapes)
-      const safeContent = sanitizeText(messageText);
+      const safeContent = sanitizeText(content.trim());
       if (!safeContent) return;
 
       try {
         const result = db.prepare(
-          'INSERT INTO messages (channel_id, user_id, content, reply_to, proxy_id, proxy_name, proxy_avatar, proxy_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(channel.id, socket.user.id, safeContent, replyTo, proxyMatch?.id || null, proxyMatch?.name || null, proxyMatch?.avatar || null, proxyMatch?.proxyType || null);
+          'INSERT INTO messages (channel_id, user_id, content, reply_to) VALUES (?, ?, ?, ?)'
+        ).run(channel.id, socket.user.id, safeContent, replyTo);
 
         const message = {
           id: result.lastInsertRowid,
           content: safeContent,
           created_at: new Date().toISOString(),
-          username: proxyMatch?.name || socket.user.displayName,
+          username: socket.user.displayName,
           user_id: socket.user.id,
-          avatar: proxyMatch?.avatar || socket.user.avatar || null,
+          avatar: socket.user.avatar || null,
           avatar_shape: socket.user.avatar_shape || 'circle',
           reply_to: replyTo,
           replyContext: null,
           reactions: [],
           edited_at: null
         };
-        if (proxyMatch) {
-          message.proxy_id = proxyMatch.id;
-          message.proxy_name = proxyMatch.name;
-          message.proxy_avatar = proxyMatch.avatar || null;
-          message.proxy_type = proxyMatch.proxyType || 'alter';
-        }
 
         // Attach reply context if replying
         if (replyTo) {
           message.replyContext = db.prepare(`
-            SELECT m.id, m.content, COALESCE(m.proxy_name, u.display_name, u.username, '[Deleted User]') as username FROM messages m
+            SELECT m.id, m.content, COALESCE(u.display_name, u.username, '[Deleted User]') as username FROM messages m
             LEFT JOIN users u ON m.user_id = u.id WHERE m.id = ?
           `).get(replyTo) || null;
         }
@@ -2000,7 +1521,7 @@ function setupSocketHandlers(io, db) {
         io.to(`channel:${code}`).emit('new-message', { channelCode: code, message });
 
         // Send push notifications to offline channel members
-        sendPushNotifications(channel.id, code, channel.name, socket.user.id, proxyMatch?.name || socket.user.displayName, safeContent);
+        sendPushNotifications(channel.id, code, channel.name, socket.user.id, socket.user.displayName, safeContent);
 
         // Auto-update sender's read position so own messages never count as unread
         try {
@@ -2035,47 +1556,28 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ VOICE (WebRTC Signaling) ═══════════════
 
-    socket.on('voice-join', (data, callback) => {
-      if (!VOICE_CHAT_ENABLED) {
-        socket.emit('error-msg', 'Voice chat is disabled');
-        if (typeof callback === 'function') callback({ ok: false, error: 'Voice chat is disabled' });
-        return;
-      }
+    socket.on('voice-join', (data) => {
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) {
-        if (typeof callback === 'function') callback({ ok: false, error: 'Invalid channel code' });
-        return;
-      }
+      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
 
       // Verify channel membership before allowing voice
       const vch = db.prepare('SELECT id FROM channels WHERE code = ?').get(code);
-      if (!vch) {
-        if (typeof callback === 'function') callback({ ok: false, error: 'Channel not found' });
-        return;
-      }
+      if (!vch) return;
       const vMember = db.prepare(
         'SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?'
       ).get(vch.id, socket.user.id);
-      if (!vMember) {
-        socket.emit('error-msg', 'Not a member of this channel');
-        if (typeof callback === 'function') callback({ ok: false, error: 'Not a member of this channel' });
-        return;
-      }
+      if (!vMember) return socket.emit('error-msg', 'Not a member of this channel');
 
       // Check channel type and voice user limit
-      const vchSettings = db.prepare('SELECT voice_enabled, voice_user_limit, voice_bitrate FROM channels WHERE code = ?').get(code);
+      const vchSettings = db.prepare('SELECT voice_enabled, voice_user_limit FROM channels WHERE code = ?').get(code);
       if (vchSettings && vchSettings.voice_enabled === 0) {
-        socket.emit('error-msg', 'Voice is disabled in this channel');
-        if (typeof callback === 'function') callback({ ok: false, error: 'Voice is disabled in this channel' });
-        return;
+        return socket.emit('error-msg', 'Voice is disabled in this channel');
       }
       if (vchSettings && vchSettings.voice_user_limit > 0) {
         const currentCount = voiceUsers.has(code) ? voiceUsers.get(code).size : 0;
         if (currentCount >= vchSettings.voice_user_limit) {
-          socket.emit('error-msg', `Voice is full (${currentCount}/${vchSettings.voice_user_limit})`);
-          if (typeof callback === 'function') callback({ ok: false, error: `Voice is full (${currentCount}/${vchSettings.voice_user_limit})` });
-          return;
+          return socket.emit('error-msg', `Voice is full (${currentCount}/${vchSettings.voice_user_limit})`);
         }
       }
 
@@ -2098,16 +1600,13 @@ function setupSocketHandlers(io, db) {
       voiceUsers.get(code).set(socket.user.id, {
         id: socket.user.id,
         username: socket.user.displayName,
-        socketId: socket.id,
-        isMuted: false,
-        isDeafened: false
+        socketId: socket.id
       });
 
       // Tell new user about existing peers (they'll create offers)
       socket.emit('voice-existing-users', {
         channelCode: code,
-        users: existingUsers.map(u => ({ id: u.id, username: u.username })),
-        voiceBitrate: vchSettings ? (vchSettings.voice_bitrate || 0) : 0
+        users: existingUsers.map(u => ({ id: u.id, username: u.username }))
       });
 
       // Tell existing users about new peer (they'll expect offers)
@@ -2133,7 +1632,6 @@ function setupSocketHandlers(io, db) {
           resolvedFrom: music.resolvedFrom
         });
       }
-      if (typeof callback === 'function') callback({ ok: true, voiceBitrate: vchSettings ? (vchSettings.voice_bitrate || 0) : 0 });
 
       // Send active screen share info to late joiner — tell screen sharers to renegotiate
       const sharers = activeScreenSharers.get(code);
@@ -2487,12 +1985,9 @@ function setupSocketHandlers(io, db) {
       // Spotify embeds are 30-second preview only (non-premium) with no external API
       const isSpotify = /open\.spotify\.com\/(track|album|playlist|episode|show)\/[a-zA-Z0-9]+/.test(data.url);
       if (isSpotify) {
-        const resolved = await resolveSpotifyToYouTube(data.url);
-        if (resolved?.url) {
-          playUrl = resolved.url;
-          resolvedFrom = 'spotify';
-        } else if (typeof resolved === 'string' && resolved) {
-          playUrl = resolved;
+        const ytUrl = await resolveSpotifyToYouTube(data.url);
+        if (ytUrl) {
+          playUrl = ytUrl;
           resolvedFrom = 'spotify';
         } else {
           // Resolution failed — notify the sharer instead of passing a broken embed
@@ -2523,17 +2018,8 @@ function setupSocketHandlers(io, db) {
       if (!isString(data.code, 8, 8)) return;
       const voiceRoom = voiceUsers.get(data.code);
       if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const current = activeMusic.get(data.code);
-      if (!current) return;
-      if (socket.user.id !== current.userId && !socket.user.isAdmin) {
-        const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-        if (!channel || !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-          return socket.emit('error-msg', 'Only the requestor or a moderator can stop playback');
-        }
-      }
       // Clear active music
       activeMusic.delete(data.code);
-      musicQueues.delete(data.code);
       for (const [uid, user] of voiceRoom) {
         io.to(user.socketId).emit('music-stopped', {
           userId: socket.user.id,
@@ -2541,7 +2027,6 @@ function setupSocketHandlers(io, db) {
           channelCode: data.code
         });
       }
-      broadcastMusicQueue(data.code);
     });
 
     // Music playback control sync (play/pause/next/prev/shuffle)
@@ -2553,30 +2038,13 @@ function setupSocketHandlers(io, db) {
       if (!allowed.includes(action)) return;
       const voiceRoom = voiceUsers.get(data.code);
       if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const current = activeMusic.get(data.code);
-      if (!current) return;
-      if (socket.user.id !== current.userId && !socket.user.isAdmin) {
-        const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-        if (!channel || !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-          const label = (action === 'play' || action === 'pause') ? 'pause/resume playback' : 'skip tracks';
-          return socket.emit('error-msg', `Only the requestor or a moderator can ${label}`);
-        }
-      }
-      const rawPosition = Number(data.positionSeconds);
-      const rawDuration = Number(data.durationSeconds);
-      const syncState = updateActiveMusicPlaybackState(data.code, {
-        isPlaying: action === 'play' ? true : action === 'pause' ? false : undefined,
-        positionSeconds: Number.isFinite(rawPosition) ? rawPosition : undefined,
-        durationSeconds: Number.isFinite(rawDuration) && rawDuration >= 0 ? rawDuration : undefined
-      });
       for (const [uid, user] of voiceRoom) {
         if (uid === socket.user.id) continue; // don't echo back to sender
         io.to(user.socketId).emit('music-control', {
           action,
           userId: socket.user.id,
           username: socket.user.displayName,
-          channelCode: data.code,
-          syncState
+          channelCode: data.code
         });
       }
     });
@@ -2585,142 +2053,22 @@ function setupSocketHandlers(io, db) {
     socket.on('music-seek', (data) => {
       if (!data || typeof data !== 'object') return;
       if (!isString(data.code, 8, 8)) return;
+      const position = parseFloat(data.position);
+      if (isNaN(position) || position < 0 || position > 100) return;
       const voiceRoom = voiceUsers.get(data.code);
       if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const current = activeMusic.get(data.code);
-      if (!current) return;
-      if (socket.user.id !== current.userId && !socket.user.isAdmin) {
-        const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-        if (!channel || !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-          return socket.emit('error-msg', 'Only the requestor or a moderator can seek');
-        }
-      }
-      const rawDuration = Number(data.durationSeconds);
-      const durationSeconds = Number.isFinite(rawDuration) && rawDuration >= 0 ? rawDuration : undefined;
-      let positionSeconds = Number(data.positionSeconds);
-      if (!Number.isFinite(positionSeconds)) {
-        const positionPct = Number(data.position);
-        if (!Number.isFinite(positionPct) || positionPct < 0 || positionPct > 100 || !Number.isFinite(durationSeconds)) return;
-        positionSeconds = (durationSeconds * positionPct) / 100;
-      }
-      const syncState = updateActiveMusicPlaybackState(data.code, {
-        positionSeconds,
-        durationSeconds
-      });
       for (const [uid, user] of voiceRoom) {
         if (uid === socket.user.id) continue;
         io.to(user.socketId).emit('music-seek', {
-          position: syncState && Number.isFinite(syncState.durationSeconds) && syncState.durationSeconds > 0
-            ? (syncState.positionSeconds / syncState.durationSeconds) * 100
-            : undefined,
-          positionSeconds: syncState ? syncState.positionSeconds : positionSeconds,
-          durationSeconds: syncState ? syncState.durationSeconds : (durationSeconds ?? null),
+          position,
           userId: socket.user.id,
           username: socket.user.displayName,
-          channelCode: data.code,
-          syncState
+          channelCode: data.code
         });
       }
     });
 
     // Music search — user types /play <query> to search by name
-    socket.on('music-finished', (data) => {
-      if (!data || typeof data !== 'object') return;
-      if (!isString(data.code, 8, 8)) return;
-      const voiceRoom = voiceUsers.get(data.code);
-      if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const current = activeMusic.get(data.code);
-      if (!current) return;
-      const trackId = trimMusicText(data.trackId, 64);
-      if (!trackId || !current.id || trackId !== current.id) return;
-      const isPrivileged = socket.user.id === current.userId || socket.user.isAdmin || (() => {
-        const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-        return !!channel && userHasPermission(socket.user.id, 'manage_music_queue', channel.id);
-      })();
-      if (data.isSkip) {
-        if (!isPrivileged) {
-          return socket.emit('error-msg', 'Only the requestor or a moderator can skip tracks');
-        }
-      } else if (!isPrivileged && !isNaturalMusicFinish(current, Number(data.positionSeconds), Number(data.durationSeconds))) {
-        return;
-      }
-      const next = popNextQueuedMusic(data.code);
-      if (next) {
-        startQueuedMusic(data.code, next);
-        return;
-      }
-      activeMusic.delete(data.code);
-      for (const [, user] of voiceRoom) {
-        io.to(user.socketId).emit('music-stopped', {
-          userId: current.userId,
-          username: current.username,
-          channelCode: data.code
-        });
-      }
-      broadcastMusicQueue(data.code);
-    });
-
-    socket.on('music-queue-remove', (data) => {
-      if (!data || typeof data !== 'object') return;
-      if (!isString(data.code, 8, 8) || !isString(data.entryId, 1, 64)) return;
-      const voiceRoom = voiceUsers.get(data.code);
-      if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-      if (!channel) return;
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-        return socket.emit('error-msg', 'You do not have permission to manage the music queue');
-      }
-      const queue = musicQueues.get(data.code) || [];
-      const nextQueue = queue.filter(item => item.id !== data.entryId);
-      if (nextQueue.length > 0) musicQueues.set(data.code, nextQueue);
-      else musicQueues.delete(data.code);
-      broadcastMusicQueue(data.code);
-    });
-
-    socket.on('music-queue-reorder', (data) => {
-      if (!data || typeof data !== 'object') return;
-      if (!isString(data.code, 8, 8) || !Array.isArray(data.entryIds)) return;
-      if (data.entryIds.length > 200) return;
-      const voiceRoom = voiceUsers.get(data.code);
-      if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-      if (!channel) return;
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-        return socket.emit('error-msg', 'You do not have permission to manage the music queue');
-      }
-      const queue = musicQueues.get(data.code) || [];
-      if (queue.length < 2) return;
-      const byId = new Map(queue.map(item => [item.id, item]));
-      const reordered = [];
-      for (const entryId of data.entryIds.map(id => trimMusicText(id, 64))) {
-        const item = byId.get(entryId);
-        if (item) reordered.push(item);
-      }
-      if (reordered.length !== queue.length) return;
-      musicQueues.set(data.code, reordered);
-      broadcastMusicQueue(data.code);
-    });
-
-    socket.on('music-queue-shuffle', (data) => {
-      if (!data || typeof data !== 'object') return;
-      if (!isString(data.code, 8, 8)) return;
-      const voiceRoom = voiceUsers.get(data.code);
-      if (!voiceRoom || !voiceRoom.has(socket.user.id)) return;
-      const channel = db.prepare('SELECT id FROM channels WHERE code = ?').get(data.code);
-      if (!channel) return;
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_music_queue', channel.id)) {
-        return socket.emit('error-msg', 'You do not have permission to manage the music queue');
-      }
-      const queue = musicQueues.get(data.code) || [];
-      if (queue.length < 2) return;
-      for (let i = queue.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [queue[i], queue[j]] = [queue[j], queue[i]];
-      }
-      musicQueues.set(data.code, queue);
-      broadcastMusicQueue(data.code);
-    });
-
     socket.on('music-search', async (data) => {
       if (!data || typeof data !== 'object') return;
       if (!isString(data.query, 1, 200)) return;
@@ -2828,11 +2176,10 @@ function setupSocketHandlers(io, db) {
         if (!data || typeof data !== 'object') return;
         const question = typeof data.question === 'string' ? data.question.trim() : '';
         if (!question || question.length > 300) return;
-        const maxPollOpts = parseInt(db.prepare('SELECT value FROM server_settings WHERE key = ?').get('max_poll_options')?.value) || 10;
         const options = Array.isArray(data.options) ? data.options : [];
-        if (options.length < 2 || options.length > maxPollOpts) return;
+        if (options.length < 2 || options.length > 10) return;
         const cleanOptions = options.map(o => typeof o === 'string' ? sanitizeText(o.trim()) : '').filter(Boolean);
-        if (cleanOptions.length < 2 || cleanOptions.length > maxPollOpts) return;
+        if (cleanOptions.length < 2 || cleanOptions.length > 10) return;
         if (cleanOptions.some(o => o.length > 100)) return;
         const multiVote = !!data.multiVote;
         const anonymous = !!data.anonymous;
@@ -3008,11 +2355,6 @@ function setupSocketHandlers(io, db) {
 
     // On-demand voice user list fetch — client can request at any time
     socket.on('request-voice-users', (data) => {
-      if (!VOICE_CHAT_ENABLED) {
-        const code = typeof data?.code === 'string' ? data.code.trim() : '';
-        if (code) socket.emit('voice-users-update', { channelCode: code, users: [] });
-        return;
-      }
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
@@ -3022,35 +2364,14 @@ function setupSocketHandlers(io, db) {
       const users = room
         ? Array.from(room.values()).map(u => {
             const role = getUserHighestRole(u.id, channelId);
-            return { id: u.id, username: u.username, roleColor: role ? role.color : null, isMuted: u.isMuted || false, isDeafened: u.isDeafened || false };
+            return { id: u.id, username: u.username, roleColor: role ? role.color : null };
           })
         : [];
       socket.emit('voice-users-update', { channelCode: code, users });
     });
 
-    socket.on('voice-mute-state', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
-      const room = voiceUsers.get(code);
-      if (!room || !room.has(socket.user.id)) return;
-      room.get(socket.user.id).isMuted = !!data.muted;
-      broadcastVoiceUsers(code);
-    });
-
-    socket.on('voice-deafen-state', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
-      const room = voiceUsers.get(code);
-      if (!room || !room.has(socket.user.id)) return;
-      room.get(socket.user.id).isDeafened = !!data.deafened;
-      broadcastVoiceUsers(code);
-    });
-
     // Voice re-join after socket reconnect — server lost state during disconnect
     socket.on('voice-rejoin', (data) => {
-      if (!VOICE_CHAT_ENABLED) return;
       if (!data || typeof data !== 'object') return;
       const code = typeof data.code === 'string' ? data.code.trim() : '';
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
@@ -3079,9 +2400,7 @@ function setupSocketHandlers(io, db) {
       voiceUsers.get(code).set(socket.user.id, {
         id: socket.user.id,
         username: socket.user.displayName,
-        socketId: socket.id,
-        isMuted: false,
-        isDeafened: false
+        socketId: socket.id
       });
 
       // Tell existing peers about the re-joined user so they can re-establish WebRTC
@@ -3108,7 +2427,7 @@ function setupSocketHandlers(io, db) {
     socket.on('get-voice-counts', () => {
       for (const [code, room] of voiceUsers) {
         if (room.size > 0) {
-          const users = Array.from(room.values()).map(u => ({ id: u.id, username: u.username, isMuted: u.isMuted || false, isDeafened: u.isDeafened || false }));
+          const users = Array.from(room.values()).map(u => ({ id: u.id, username: u.username }));
           socket.emit('voice-count-update', { code, count: room.size, users });
         }
       }
@@ -3207,7 +2526,7 @@ function setupSocketHandlers(io, db) {
 
     socket.on('delete-channel', (data) => {
       if (!data || typeof data !== 'object') return;
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'delete_channel')) {
+      if (!socket.user.isAdmin) {
         return socket.emit('error-msg', 'Only admins can delete channels');
       }
 
@@ -3287,7 +2606,7 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ DELETE MESSAGE ═════════════════════════
 
-    socket.on('delete-message', async (data) => {
+    socket.on('delete-message', (data) => {
       if (!data || typeof data !== 'object') return;
       if (!isInt(data.messageId)) return;
 
@@ -3298,7 +2617,7 @@ function setupSocketHandlers(io, db) {
       if (!channel) return;
 
       const msg = db.prepare(
-        'SELECT id, user_id, content FROM messages WHERE id = ? AND channel_id = ?'
+        'SELECT id, user_id FROM messages WHERE id = ? AND channel_id = ?'
       ).get(data.messageId, channel.id);
       if (!msg) return;
 
@@ -3339,75 +2658,22 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Failed to delete message');
       }
 
-      const uploadMatches = String(msg.content || '').match(/\/uploads\/([\w.-]+)/g) || [];
-      const uploadNames = [...new Set(uploadMatches.map(entry => entry.replace('/uploads/', '')).filter(Boolean))];
-      await Promise.allSettled(uploadNames.map(name => deleteUploadByName(name)));
+      // Move any uploaded files referenced in the message to the deleted-attachments
+      // folder so they're preserved temporarily and swept by auto-cleanup later.
+      const uploadRe = /\/uploads\/((?!deleted-attachments)[\w\-.]+)/g;
+      let m;
+      while ((m = uploadRe.exec(msg.content || '')) !== null) {
+        const src = path.join(UPLOADS_DIR, m[1]);
+        const dst = path.join(DELETED_ATTACHMENTS_DIR, m[1]);
+        if (fs.existsSync(src)) {
+          try { fs.renameSync(src, dst); } catch { /* file locked or already moved */ }
+        }
+      }
 
       io.to(`channel:${code}`).emit('message-deleted', {
         channelCode: code,
         messageId: data.messageId
       });
-    });
-
-    // ═══════════════ MOVE MESSAGES ══════════════════════════
-
-    socket.on('move-messages', (data, callback) => {
-      if (!data || typeof data !== 'object') return;
-      const cb = typeof callback === 'function' ? callback : () => {};
-
-      const messageIds = Array.isArray(data.messageIds) ? data.messageIds.filter(id => isInt(id)) : [];
-      if (messageIds.length === 0 || messageIds.length > 200) return cb({ error: 'Select between 1 and 200 messages' });
-
-      const fromCode = typeof data.fromChannel === 'string' ? data.fromChannel.trim() : '';
-      const toCode   = typeof data.toChannel   === 'string' ? data.toChannel.trim()   : '';
-      if (!fromCode || !toCode || fromCode === toCode) return cb({ error: 'Invalid channels' });
-      if (!/^[a-f0-9]{8}$/i.test(fromCode) || !/^[a-f0-9]{8}$/i.test(toCode)) return cb({ error: 'Invalid channel codes' });
-
-      const fromCh = db.prepare('SELECT id, is_dm FROM channels WHERE code = ?').get(fromCode);
-      const toCh   = db.prepare('SELECT id, is_dm FROM channels WHERE code = ?').get(toCode);
-      if (!fromCh || !toCh) return cb({ error: 'Channel not found' });
-      if (fromCh.is_dm || toCh.is_dm) return cb({ error: 'Cannot move messages to or from DMs' });
-
-      // Permission: admin or delete_message on the source channel
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'delete_message', fromCh.id)) {
-        return cb({ error: 'You need message management permissions to move messages' });
-      }
-
-      // Verify all messages belong to the source channel
-      const placeholders = messageIds.map(() => '?').join(',');
-      const count = db.prepare(
-        `SELECT COUNT(*) as cnt FROM messages WHERE id IN (${placeholders}) AND channel_id = ?`
-      ).get(...messageIds, fromCh.id);
-      if (!count || count.cnt !== messageIds.length) return cb({ error: 'Some messages were not found in the source channel' });
-
-      // Move messages in a transaction
-      try {
-        db.prepare(
-          `UPDATE messages SET channel_id = ? WHERE id IN (${placeholders}) AND channel_id = ?`
-        ).run(toCh.id, ...messageIds, fromCh.id);
-
-        // Also move any pinned_messages references
-        db.prepare(
-          `UPDATE pinned_messages SET channel_id = ? WHERE message_id IN (${placeholders}) AND channel_id = ?`
-        ).run(toCh.id, ...messageIds, fromCh.id);
-      } catch (err) {
-        console.error('Move messages error:', err);
-        return cb({ error: 'Failed to move messages' });
-      }
-
-      // Notify both channels
-      io.to(`channel:${fromCode}`).emit('messages-moved', {
-        channelCode: fromCode,
-        messageIds,
-        toChannel: toCode
-      });
-      io.to(`channel:${toCode}`).emit('messages-received', {
-        channelCode: toCode,
-        fromChannel: fromCode,
-        messageIds
-      });
-
-      cb({ success: true, moved: messageIds.length });
     });
 
     // ═══════════════ PIN / UNPIN MESSAGE ════════════════════
@@ -3794,14 +3060,8 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'You can\'t delete yourself');
       }
 
-      const targetUser = db.prepare('SELECT id, username, display_name, COALESCE(display_name, username) as displayName FROM users WHERE id = ?').get(data.userId);
+      const targetUser = db.prepare('SELECT id, COALESCE(display_name, username) as username FROM users WHERE id = ?').get(data.userId);
       if (!targetUser) return socket.emit('error-msg', 'User not found');
-
-      // Record the deletion for audit trail (before purging the user row)
-      const reason = typeof data.reason === 'string' ? data.reason.trim().slice(0, 500) : '';
-      db.prepare('INSERT INTO deleted_users (username, display_name, reason, deleted_by) VALUES (?, ?, ?, ?)').run(
-        targetUser.username, targetUser.display_name, reason, socket.user.id
-      );
 
       // Disconnect the user if online
       for (const [, s] of io.sockets.sockets) {
@@ -3860,14 +3120,7 @@ function setupSocketHandlers(io, db) {
         return socket.emit('error-msg', 'Failed to delete user');
       }
 
-      socket.emit('error-msg', `Deleted user "${targetUser.displayName}" — username is now available`);
-
-      // Notify all admins so their member lists update in real time
-      for (const [, s] of io.sockets.sockets) {
-        if (s.user && s.user.isAdmin) {
-          s.emit('user-deleted', { userId: data.userId, username: targetUser.displayName });
-        }
-      }
+      socket.emit('error-msg', `Deleted user "${targetUser.username}" — username is now available`);
 
       // Refresh ban list for admin
       const bans = db.prepare(`
@@ -3877,7 +3130,7 @@ function setupSocketHandlers(io, db) {
       bans.forEach(b => { b.created_at = utcStamp(b.created_at); });
       socket.emit('ban-list', bans);
 
-      console.log(`🗑️  Admin deleted user "${targetUser.displayName}" (id: ${data.userId})`);
+      console.log(`🗑️  Admin deleted user "${targetUser.username}" (id: ${data.userId})`);
     });
 
     // ═══════════════ SELF-DELETE ACCOUNT ═════════════════════
@@ -4042,130 +3295,6 @@ function setupSocketHandlers(io, db) {
       socket.emit('error-msg', `Unmuted ${targetUser ? targetUser.username : 'user'}`);
     });
 
-    socket.on('server-kick-user', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const serverId = isInt(data.serverId) ? data.serverId : null;
-      const targetUserId = isInt(data.userId) ? data.userId : null;
-      if (!serverId || !targetUserId) return;
-      if (!socket.user.isAdmin && !userHasServerPermission(socket.user.id, 'kick_user', serverId)) {
-        return socket.emit('error-msg', 'You do not have permission to kick users from this server');
-      }
-      if (targetUserId === socket.user.id) return socket.emit('error-msg', 'You cannot kick yourself');
-
-      const server = db.prepare('SELECT id, name FROM servers WHERE id = ?').get(serverId);
-      const targetUser = db.prepare('SELECT id, is_admin, COALESCE(display_name, username) as username FROM users WHERE id = ?').get(targetUserId);
-      if (!server || !targetUser) return socket.emit('error-msg', 'User or server not found');
-      if (targetUser.is_admin && !socket.user.isAdmin) return socket.emit('error-msg', 'You cannot kick an admin');
-
-      if (!socket.user.isAdmin) {
-        const sampleChannel = db.prepare('SELECT id FROM channels WHERE server_id = ? AND is_dm = 0 ORDER BY id LIMIT 1').get(serverId);
-        const myLevel = getUserEffectiveLevel(socket.user.id, sampleChannel?.id || null);
-        const targetLevel = getUserEffectiveLevel(targetUserId, sampleChannel?.id || null);
-        if (targetLevel >= myLevel) return socket.emit('error-msg', 'You cannot kick a user with equal or higher rank');
-      }
-
-      const serverChannels = db.prepare('SELECT id, code FROM channels WHERE server_id = ? AND is_dm = 0').all(serverId);
-      const removeMemberships = db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?');
-      serverChannels.forEach(ch => removeMemberships.run(ch.id, targetUserId));
-
-      const targetSockets = [...io.sockets.sockets.values()].filter(s => s.user && s.user.id === targetUserId);
-      for (const ts of targetSockets) {
-        serverChannels.forEach(ch => ts.leave(`channel:${ch.code}`));
-        ts.emit('channels-list', getEnrichedChannels(targetUserId, ts.user.isAdmin, (room) => ts.join(room)));
-        emitServersList(ts);
-        ts.emit('toast', { message: `You were kicked from ${server.name}`, type: 'warning' });
-        if (ts.currentChannel) {
-          const current = db.prepare('SELECT server_id FROM channels WHERE code = ?').get(ts.currentChannel);
-          if (current?.server_id === serverId) {
-            const fallback = getEnrichedChannels(targetUserId, ts.user.isAdmin).find(c => !c.is_dm);
-            if (fallback) ts.emit('server-joined', { serverId: fallback.server_id, firstChannelCode: fallback.code });
-          }
-        }
-      }
-
-      socket.emit('error-msg', `Server kicked ${targetUser.username}`);
-      emitServersList(socket);
-    });
-
-    socket.on('server-ban-user', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const serverId = isInt(data.serverId) ? data.serverId : null;
-      const targetUserId = isInt(data.userId) ? data.userId : null;
-      if (!serverId || !targetUserId) return;
-      if (!socket.user.isAdmin && !userHasServerPermission(socket.user.id, 'ban_user', serverId)) {
-        return socket.emit('error-msg', 'You do not have permission to ban users from this server');
-      }
-      if (targetUserId === socket.user.id) return socket.emit('error-msg', 'You cannot ban yourself');
-
-      const server = db.prepare('SELECT id, name FROM servers WHERE id = ?').get(serverId);
-      const targetUser = db.prepare('SELECT id, is_admin, COALESCE(display_name, username) as username FROM users WHERE id = ?').get(targetUserId);
-      if (!server || !targetUser) return socket.emit('error-msg', 'User or server not found');
-      if (targetUser.is_admin && !socket.user.isAdmin) return socket.emit('error-msg', 'You cannot ban an admin');
-
-      if (!socket.user.isAdmin) {
-        const sampleChannel = db.prepare('SELECT id FROM channels WHERE server_id = ? AND is_dm = 0 ORDER BY id LIMIT 1').get(serverId);
-        const myLevel = getUserEffectiveLevel(socket.user.id, sampleChannel?.id || null);
-        const targetLevel = getUserEffectiveLevel(targetUserId, sampleChannel?.id || null);
-        if (targetLevel >= myLevel) return socket.emit('error-msg', 'You cannot ban a user with equal or higher rank');
-      }
-
-      db.prepare('INSERT OR REPLACE INTO server_bans (server_id, user_id, banned_by, reason) VALUES (?, ?, ?, ?)')
-        .run(serverId, targetUserId, socket.user.id, typeof data.reason === 'string' ? data.reason.trim().slice(0, 200) : '');
-      db.prepare('DELETE FROM server_mutes WHERE server_id = ? AND user_id = ?').run(serverId, targetUserId);
-
-      const serverChannels = db.prepare('SELECT id, code FROM channels WHERE server_id = ? AND is_dm = 0').all(serverId);
-      const removeMemberships = db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?');
-      serverChannels.forEach(ch => removeMemberships.run(ch.id, targetUserId));
-
-      const targetSockets = [...io.sockets.sockets.values()].filter(s => s.user && s.user.id === targetUserId);
-      for (const ts of targetSockets) {
-        serverChannels.forEach(ch => ts.leave(`channel:${ch.code}`));
-        ts.emit('channels-list', getEnrichedChannels(targetUserId, ts.user.isAdmin, (room) => ts.join(room)));
-        emitServersList(ts);
-        ts.emit('toast', { message: `You were banned from ${server.name}`, type: 'warning' });
-      }
-
-      socket.emit('error-msg', `Server banned ${targetUser.username}`);
-    });
-
-    socket.on('server-mute-user', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const serverId = isInt(data.serverId) ? data.serverId : null;
-      const targetUserId = isInt(data.userId) ? data.userId : null;
-      if (!serverId || !targetUserId) return;
-      if (!socket.user.isAdmin && !userHasServerPermission(socket.user.id, 'mute_user', serverId)) {
-        return socket.emit('error-msg', 'You do not have permission to mute users in this server');
-      }
-      if (targetUserId === socket.user.id) return socket.emit('error-msg', 'You cannot mute yourself');
-
-      const server = db.prepare('SELECT id, name FROM servers WHERE id = ?').get(serverId);
-      const targetUser = db.prepare('SELECT id, is_admin, COALESCE(display_name, username) as username FROM users WHERE id = ?').get(targetUserId);
-      if (!server || !targetUser) return socket.emit('error-msg', 'User or server not found');
-      if (targetUser.is_admin && !socket.user.isAdmin) return socket.emit('error-msg', 'You cannot mute an admin');
-
-      if (!socket.user.isAdmin) {
-        const sampleChannel = db.prepare('SELECT id FROM channels WHERE server_id = ? AND is_dm = 0 ORDER BY id LIMIT 1').get(serverId);
-        const myLevel = getUserEffectiveLevel(socket.user.id, sampleChannel?.id || null);
-        const targetLevel = getUserEffectiveLevel(targetUserId, sampleChannel?.id || null);
-        if (targetLevel >= myLevel) return socket.emit('error-msg', 'You cannot mute a user with equal or higher rank');
-      }
-
-      const durationMinutes = isInt(data.duration) && data.duration > 0 && data.duration <= 43200 ? data.duration : 10;
-      db.prepare('DELETE FROM server_mutes WHERE server_id = ? AND user_id = ?').run(serverId, targetUserId);
-      db.prepare(`
-        INSERT INTO server_mutes (server_id, user_id, muted_by, reason, expires_at)
-        VALUES (?, ?, ?, ?, datetime('now', ?))
-      `).run(serverId, targetUserId, socket.user.id, typeof data.reason === 'string' ? data.reason.trim().slice(0, 200) : '', `+${durationMinutes} minutes`);
-
-      for (const [, s] of io.sockets.sockets) {
-        if (s.user && s.user.id === targetUserId) {
-          s.emit('muted', { duration: durationMinutes, reason: `Muted in ${server.name}` });
-        }
-      }
-
-      socket.emit('error-msg', `Server muted ${targetUser.username} for ${durationMinutes} min`);
-    });
-
     // ═══════════════ ADMIN: GET BAN LIST ════════════════════
 
     socket.on('get-bans', () => {
@@ -4176,19 +3305,6 @@ function setupSocketHandlers(io, db) {
       `).all();
       bans.forEach(b => { b.created_at = utcStamp(b.created_at); });
       socket.emit('ban-list', bans);
-    });
-
-    socket.on('get-deleted-users', () => {
-      if (!socket.user.isAdmin) return;
-      const rows = db.prepare(`
-        SELECT d.id, d.username, d.display_name, d.reason, d.deleted_at,
-               COALESCE(u.display_name, u.username) as deleted_by_name
-        FROM deleted_users d
-        LEFT JOIN users u ON d.deleted_by = u.id
-        ORDER BY d.deleted_at DESC
-      `).all();
-      rows.forEach(r => { r.deleted_at = utcStamp(r.deleted_at); });
-      socket.emit('deleted-users-list', rows);
     });
 
     // ═══════════════ SERVER SETTINGS ════════════════════════
@@ -4207,14 +3323,14 @@ function setupSocketHandlers(io, db) {
     // ═══════════════ WHITELIST MANAGEMENT ═══════════════════
 
     socket.on('get-whitelist', () => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) return;
+      if (!socket.user.isAdmin) return;
       const rows = db.prepare('SELECT id, username, created_at FROM whitelist ORDER BY username').all();
       rows.forEach(r => { r.created_at = utcStamp(r.created_at); });
       socket.emit('whitelist-list', rows);
     });
 
     socket.on('whitelist-add', (data) => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) return;
+      if (!socket.user.isAdmin) return;
       if (!data || typeof data !== 'object') return;
       const username = typeof data.username === 'string' ? data.username.trim() : '';
       if (!username || username.length < 3 || username.length > 20) {
@@ -4237,7 +3353,7 @@ function setupSocketHandlers(io, db) {
     });
 
     socket.on('whitelist-remove', (data) => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) return;
+      if (!socket.user.isAdmin) return;
       if (!data || typeof data !== 'object') return;
       const username = typeof data.username === 'string' ? data.username.trim() : '';
       if (!username) return;
@@ -4251,7 +3367,7 @@ function setupSocketHandlers(io, db) {
     });
 
     socket.on('whitelist-toggle', (data) => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) return;
+      if (!socket.user.isAdmin) return;
       if (!data || typeof data !== 'object') return;
       const enabled = data.enabled === true ? 'true' : 'false';
       db.prepare("INSERT OR REPLACE INTO server_settings (key, value) VALUES ('whitelist_enabled', ?)").run(enabled);
@@ -4334,14 +3450,14 @@ function setupSocketHandlers(io, db) {
 
     socket.on('update-server-setting', (data) => {
       if (!data || typeof data !== 'object') return;
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
+      if (!socket.user.isAdmin) {
         return socket.emit('error-msg', 'Only admins can change server settings');
       }
 
       const key = typeof data.key === 'string' ? data.key.trim() : '';
       const value = typeof data.value === 'string' ? data.value.trim() : '';
 
-      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'cleanup_messages_mb', 'cleanup_attachments_mb', 'cleanup_emojis_mb', 'cleanup_sounds_mb', 'cleanup_proxy_avatars_mb', 'giphy_api_key', 'server_name', 'server_title', 'server_icon', 'display_version', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'max_poll_options', 'max_sound_kb', 'max_emoji_kb', 'max_proxy_avatar_kb', 'setup_wizard_complete', 'default_theme', 'channel_sort_mode'];
+      const allowedKeys = ['member_visibility', 'cleanup_enabled', 'cleanup_max_age_days', 'cleanup_max_size_mb', 'giphy_api_key', 'server_name', 'server_icon', 'permission_thresholds', 'tunnel_enabled', 'tunnel_provider', 'server_code', 'max_upload_mb', 'setup_wizard_complete', 'update_banner_admin_only', 'default_theme'];
       if (!allowedKeys.includes(key)) return;
 
       if (key === 'member_visibility' && !['all', 'online', 'none'].includes(value)) return;
@@ -4354,29 +3470,9 @@ function setupSocketHandlers(io, db) {
         const n = parseInt(value);
         if (isNaN(n) || n < 0 || n > 100000) return;
       }
-      if (['cleanup_messages_mb', 'cleanup_attachments_mb', 'cleanup_emojis_mb', 'cleanup_sounds_mb', 'cleanup_proxy_avatars_mb'].includes(key)) {
-        const n = parseInt(value);
-        if (isNaN(n) || n < 0 || n > 100000) return;
-      }
       if (key === 'max_upload_mb') {
         const n = parseInt(value);
         if (isNaN(n) || n < 1 || n > 2048) return;
-      }
-      if (key === 'max_poll_options') {
-        const n = parseInt(value);
-        if (isNaN(n) || n < 2 || n > 25) return;
-      }
-      if (key === 'max_sound_kb') {
-        const n = parseInt(value);
-        if (isNaN(n) || n < 256 || n > 10240) return;
-      }
-      if (key === 'max_emoji_kb') {
-        const n = parseInt(value);
-        if (isNaN(n) || n < 64 || n > 1024) return;
-      }
-      if (key === 'max_proxy_avatar_kb') {
-        const n = parseInt(value);
-        if (isNaN(n) || n < 32 || n > 2048) return;
       }
       if (key === 'giphy_api_key') {
         // Allow empty value to clear the key, otherwise validate format
@@ -4385,19 +3481,13 @@ function setupSocketHandlers(io, db) {
       if (key === 'server_name') {
         if (value.length > 32) return;
       }
-      if (key === 'server_title') {
-        if (value.length > 40) return;
-      }
-      if (key === 'display_version') {
-        if (value.length > 20) return;
-      }
       if (key === 'server_icon') {
         if (value && !isValidUploadPath(value)) return;
       }
       if (key === 'tunnel_enabled' && !['true', 'false'].includes(value)) return;
       if (key === 'tunnel_provider' && !['localtunnel', 'cloudflared'].includes(value)) return;
       if (key === 'setup_wizard_complete' && !['true', 'false'].includes(value)) return;
-      if (key === 'channel_sort_mode' && !['manual', 'alpha', 'created', 'oldest', 'dynamic'].includes(value)) return;
+      if (key === 'update_banner_admin_only' && !['true', 'false'].includes(value)) return;
       if (key === 'default_theme') {
         const validThemes = ['', 'haven', 'discord', 'matrix', 'fallout', 'ffx', 'ice', 'nord', 'darksouls', 'eldenring', 'bloodborne', 'cyberpunk', 'lotr', 'abyss', 'scripture', 'chapel', 'gospel', 'tron', 'halo', 'dracula', 'win95'];
         if (!validThemes.includes(value)) return;
@@ -4411,7 +3501,13 @@ function setupSocketHandlers(io, db) {
         try {
           const obj = JSON.parse(value);
           if (typeof obj !== 'object' || Array.isArray(obj)) return;
-          const validPerms = VALID_ROLE_PERMS;
+          const validPerms = [
+            'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
+            'pin_message', 'kick_user', 'mute_user', 'ban_user',
+            'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
+            'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+            'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard'
+          ];
           for (const [k, v] of Object.entries(obj)) {
             if (!validPerms.includes(k)) return;
             if (!Number.isInteger(v) || v < 1 || v > 100) return;
@@ -4441,35 +3537,29 @@ function setupSocketHandlers(io, db) {
 
     // ═══════════════ SERVER-WIDE INVITE CODE ════════════════
 
-    socket.on('generate-server-code', (data = {}) => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
+    socket.on('generate-server-code', () => {
+      if (!socket.user.isAdmin) {
         return socket.emit('error-msg', 'Only admins can manage server codes');
       }
-      const serverId = Number(data.serverId);
-      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
-      if (!server) return socket.emit('error-msg', 'Server not found');
-      const code = generateServerCode();
-      db.prepare('UPDATE servers SET code = ? WHERE id = ?').run(code, server.id);
-      for (const [, s] of io.sockets.sockets) emitServersList(s);
-      socket.emit('error-msg', `${server.name} invite code generated: ${code}`);
+      const code = generateChannelCode();
+      db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', code);
+      io.emit('server-setting-changed', { key: 'server_code', value: code });
+      socket.emit('error-msg', `Server invite code generated: ${code}`);
     });
 
-    socket.on('clear-server-code', (data = {}) => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
+    socket.on('clear-server-code', () => {
+      if (!socket.user.isAdmin) {
         return socket.emit('error-msg', 'Only admins can manage server codes');
       }
-      const serverId = Number(data.serverId);
-      const server = getServerByIdForUser(serverId, socket.user.id, socket.user.isAdmin) || db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
-      if (!server) return socket.emit('error-msg', 'Server not found');
-      db.prepare('UPDATE servers SET code = ? WHERE id = ?').run('', server.id);
-      for (const [, s] of io.sockets.sockets) emitServersList(s);
-      socket.emit('error-msg', `${server.name} invite code cleared`);
+      db.prepare('INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)').run('server_code', '');
+      io.emit('server-setting-changed', { key: 'server_code', value: '' });
+      socket.emit('error-msg', 'Server invite code cleared');
     });
 
     // ═══════════════ ADMIN: RUN CLEANUP NOW ═════════════════
 
     socket.on('run-cleanup-now', () => {
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_server')) {
+      if (!socket.user.isAdmin) {
         return socket.emit('error-msg', 'Only admins can run cleanup');
       }
       // Trigger the global cleanup function exposed on the server
@@ -4753,8 +3843,6 @@ function setupSocketHandlers(io, db) {
           if (s.user && s.user.id === data.userId) { isOnline = true; break; }
         }
 
-        const proxySummary = getProxySummary(data.userId, socket.user.id);
-
         socket.emit('user-profile', {
           id: row.id,
           username: row.username,
@@ -4766,10 +3854,7 @@ function setupSocketHandlers(io, db) {
           bio: row.bio || '',
           roles: roles,
           online: isOnline,
-          createdAt: row.created_at,
-          proxyCount: proxySummary.proxyCount,
-          hiddenProxyCount: proxySummary.hiddenProxyCount,
-          canViewPrivateProxies: proxySummary.canViewPrivate
+          createdAt: row.created_at
         });
       } catch (err) {
         console.error('Get user profile error:', err);
@@ -4788,92 +3873,6 @@ function setupSocketHandlers(io, db) {
     });
 
     // ═══════════════ PUSH NOTIFICATIONS ═════════════════════
-
-    socket.on('get-my-proxies', (cb) => {
-      const callback = typeof cb === 'function' ? cb : () => {};
-      try {
-        callback({ proxies: getVisibleProxiesForUser(socket.user.id, socket.user.id) });
-      } catch (err) {
-        console.error('Get my proxies error:', err);
-        callback({ error: 'Failed to load proxies' });
-      }
-    });
-
-    socket.on('get-user-proxies', (data, cb) => {
-      const callback = typeof cb === 'function' ? cb : () => {};
-      const userId = isInt(data?.userId) ? data.userId : null;
-      if (!userId) return callback({ error: 'Invalid user' });
-      try {
-        callback({
-          userId,
-          proxies: getVisibleProxiesForUser(userId, socket.user.id),
-          canManage: userId === socket.user.id,
-          canViewPrivate: userId === socket.user.id || canModerateUserProxies(socket.user.id)
-        });
-      } catch (err) {
-        console.error('Get user proxies error:', err);
-        callback({ error: 'Failed to load proxy library' });
-      }
-    });
-
-    socket.on('save-proxy', (data, cb) => {
-      const callback = typeof cb === 'function' ? cb : () => {};
-      if (!data || typeof data !== 'object') return callback({ error: 'Invalid request' });
-
-      const proxyId = isInt(data.id) ? data.id : null;
-      const name = sanitizeText(String(data.name || '').trim()).slice(0, 40);
-      const bio = sanitizeText(String(data.bio || '').trim()).slice(0, 190);
-      const triggerPrefix = String(data.triggerPrefix || '').trim().slice(0, 40);
-      const triggerSuffix = String(data.triggerSuffix || '').trim().slice(0, 40);
-      const groupName = sanitizeText(String(data.groupName || '').trim()).slice(0, 30);
-      const avatarUrl = data.avatarUrl ? String(data.avatarUrl).trim() : '';
-      const isPublic = data.isPublic !== false;
-      const proxyType = data.proxyType === 'character' ? 'character' : 'alter';
-
-      if (!name) return callback({ error: 'Proxy name is required' });
-      if (!triggerPrefix) return callback({ error: 'Trigger prefix is required' });
-      if (avatarUrl && !isValidUploadPath(avatarUrl)) return callback({ error: 'Invalid proxy avatar' });
-
-      try {
-        if (proxyId) {
-          const existing = db.prepare('SELECT id, user_id FROM proxies WHERE id = ?').get(proxyId);
-          if (!existing || existing.user_id !== socket.user.id) return callback({ error: 'Proxy not found' });
-          db.prepare(`
-            UPDATE proxies
-            SET name = ?, proxy_type = ?, bio = ?, avatar_url = ?, trigger_prefix = ?, trigger_suffix = ?, group_name = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `).run(name, proxyType, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0, proxyId);
-        } else {
-          const count = db.prepare('SELECT COUNT(*) AS cnt FROM proxies WHERE user_id = ?').get(socket.user.id)?.cnt || 0;
-          if (count >= 100) return callback({ error: 'You can create up to 100 proxies' });
-          db.prepare(`
-            INSERT INTO proxies (user_id, name, proxy_type, bio, avatar_url, trigger_prefix, trigger_suffix, group_name, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(socket.user.id, name, proxyType, bio, avatarUrl || null, triggerPrefix, triggerSuffix, groupName, isPublic ? 1 : 0);
-        }
-
-        callback({ ok: true, proxies: getVisibleProxiesForUser(socket.user.id, socket.user.id) });
-      } catch (err) {
-        console.error('Save proxy error:', err);
-        callback({ error: 'Failed to save proxy' });
-      }
-    });
-
-    socket.on('delete-proxy', (data, cb) => {
-      const callback = typeof cb === 'function' ? cb : () => {};
-      const proxyId = isInt(data?.id) ? data.id : null;
-      if (!proxyId) return callback({ error: 'Invalid proxy' });
-
-      try {
-        const existing = db.prepare('SELECT id, user_id FROM proxies WHERE id = ?').get(proxyId);
-        if (!existing || existing.user_id !== socket.user.id) return callback({ error: 'Proxy not found' });
-        db.prepare('DELETE FROM proxies WHERE id = ?').run(proxyId);
-        callback({ ok: true, proxies: getVisibleProxiesForUser(socket.user.id, socket.user.id) });
-      } catch (err) {
-        console.error('Delete proxy error:', err);
-        callback({ error: 'Failed to delete proxy' });
-      }
-    });
 
     socket.on('push-subscribe', (data) => {
       if (!data || typeof data !== 'object') return;
@@ -5252,10 +4251,9 @@ function setupSocketHandlers(io, db) {
       // Auto-assign roles
       try {
         const autoRoles = db.prepare('SELECT id FROM roles WHERE auto_assign = 1').all();
-        const mainServerId = getMainServer()?.id || null;
-        const insertAutoRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id, server_id, channel_id, granted_by) VALUES (?, ?, ?, NULL, NULL)');
+        const insertAutoRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id, channel_id, granted_by) VALUES (?, ?, NULL, NULL)');
         for (const ar of autoRoles) {
-          insertAutoRole.run(targetUserId, ar.id, mainServerId);
+          insertAutoRole.run(targetUserId, ar.id);
           applyRoleChannelAccess(ar.id, targetUserId, 'grant');
         }
       } catch { /* non-critical */ }
@@ -5348,9 +4346,6 @@ function setupSocketHandlers(io, db) {
         'SELECT u.id, COALESCE(u.display_name, u.username) as username FROM users u LEFT JOIN bans b ON u.id = b.user_id WHERE u.id = ? AND b.id IS NULL'
       ).get(targetId);
       if (!target) return socket.emit('error-msg', 'User not found');
-      if (hasUserBlocked(socket.user.id, targetId) || hasUserBlocked(targetId, socket.user.id)) {
-        return socket.emit('error-msg', 'You cannot DM this user');
-      }
 
       // Check if DM channel already exists between these two users
       const existingDm = db.prepare(`
@@ -5597,7 +4592,7 @@ function setupSocketHandlers(io, db) {
       const users = room
         ? Array.from(room.values()).map(u => {
             const role = getUserHighestRole(u.id, channelId);
-            return { id: u.id, username: u.username, roleColor: role ? role.color : null, isMuted: u.isMuted || false, isDeafened: u.isDeafened || false };
+            return { id: u.id, username: u.username, roleColor: role ? role.color : null };
           })
         : [];
       // Emit to voice participants (may have switched text channels) AND text viewers
@@ -5609,7 +4604,7 @@ function setupSocketHandlers(io, db) {
       io.emit('voice-count-update', {
         code,
         count: users.length,
-        users: users.map(u => ({ id: u.id, username: u.username, isMuted: u.isMuted || false, isDeafened: u.isDeafened || false }))
+        users: users.map(u => ({ id: u.id, username: u.username }))
       });
     }
 
@@ -5700,32 +4695,76 @@ function setupSocketHandlers(io, db) {
         return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
       });
 
-      // Check if per-socket emission is needed (invisible users require per-viewer filtering)
-      const hasInvisible = users.some(u => u.status === 'invisible');
+      // Build "all server users" list for recipients with view_all_members perm.
+      // Only built on demand (lazy) to avoid the cost when nobody needs it.
+      let _allServerUsers = null;
+      function getAllServerUsers() {
+        if (_allServerUsers) return _allServerUsers;
+        const globalOnlineIds = new Set();
+        for (const [, s2] of io.of('/').sockets) {
+          if (s2.user) globalOnlineIds.add(s2.user.id);
+        }
+        const allRows = db.prepare(
+          `SELECT u.id, COALESCE(u.display_name, u.username) as username
+           FROM users u LEFT JOIN bans b ON u.id = b.user_id
+           WHERE b.id IS NULL
+           ORDER BY COALESCE(u.display_name, u.username)`
+        ).all();
+        _allServerUsers = allRows.map(m => ({
+          id: m.id, username: m.username, online: globalOnlineIds.has(m.id),
+          highScore: scores[m.id] || 0,
+          status: statusMap[m.id]?.status || 'online',
+          statusText: statusMap[m.id]?.statusText || '',
+          avatar: statusMap[m.id]?.avatar || null,
+          avatarShape: statusMap[m.id]?.avatarShape || 'circle',
+          role: getUserHighestRole(m.id, channel ? channel.id : null)
+        }));
+        _allServerUsers.sort((a, b) => {
+          if (a.online !== b.online) return a.online ? -1 : 1;
+          return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
+        });
+        return _allServerUsers;
+      }
 
-      if (!hasInvisible) {
-        // Fast path: no invisible users, broadcast to everyone
+      // Check if per-socket emission is needed
+      const hasInvisible = users.some(u => u.status === 'invisible');
+      let hasViewAll = false;
+      for (const [, s] of io.of('/').sockets) {
+        if (s.user && s.rooms && s.rooms.has(`channel:${code}`)) {
+          if (s.user.isAdmin || userHasPermission(s.user.id, 'view_all_members')) {
+            hasViewAll = true;
+            break;
+          }
+        }
+      }
+
+      if (!hasInvisible && !hasViewAll) {
+        // Fast path: no invisible users and no view_all_members, broadcast to everyone
         io.to(`channel:${code}`).emit('online-users', {
           channelCode: code,
           users,
           visibilityMode: mode
         });
       } else {
-        // Per-socket path: hide invisible users from non-self viewers
+        // Per-socket path: customizes list for invisible users and view_all_members
         for (const [, s] of io.of('/').sockets) {
           if (!s.user || !s.rooms || !s.rooms.has(`channel:${code}`)) continue;
           const viewerId = s.user.id;
+          const viewerHasViewAll = s.user.isAdmin || userHasPermission(viewerId, 'view_all_members');
+          let baseList = viewerHasViewAll ? getAllServerUsers() : users;
 
-          const customUsers = users.map(u => {
+          const customUsers = baseList.map(u => {
             if (u.status === 'invisible' && u.id !== viewerId) {
               return { ...u, online: false, status: 'offline' };
             }
             return u;
           });
-          customUsers.sort((a, b) => {
-            if (a.online !== b.online) return a.online ? -1 : 1;
-            return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
-          });
+          if (hasInvisible) {
+            customUsers.sort((a, b) => {
+              if (a.online !== b.online) return a.online ? -1 : 1;
+              return a.username.toLowerCase().localeCompare(b.username.toLowerCase());
+            });
+          }
           s.emit('online-users', {
             channelCode: code,
             users: customUsers,
@@ -5885,12 +4924,12 @@ function setupSocketHandlers(io, db) {
     socket.on('get-channel-member-roles', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can view channel roles' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can view channel roles' });
 
       const code = typeof data.code === 'string' ? data.code.trim() : '';
       if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb({ error: 'Invalid channel' });
 
-      const channel = db.prepare('SELECT id, name, server_id FROM channels WHERE code = ?').get(code);
+      const channel = db.prepare('SELECT id, name FROM channels WHERE code = ?').get(code);
       if (!channel) return cb({ error: 'Channel not found' });
 
       // Get all channel members
@@ -5909,17 +4948,13 @@ function setupSocketHandlers(io, db) {
       if (memberIds.length > 0) {
         const placeholders = memberIds.map(() => '?').join(',');
         const roleRows = db.prepare(`
-          SELECT ur.user_id, r.id as role_id, r.name, r.level, r.color, ur.server_id, ur.channel_id
+          SELECT ur.user_id, r.id as role_id, r.name, r.level, r.color, ur.channel_id
           FROM user_roles ur
           JOIN roles r ON ur.role_id = r.id
           WHERE ur.user_id IN (${placeholders})
-            AND (
-              (ur.channel_id IS NULL AND ur.server_id IS NULL)
-              OR (ur.channel_id IS NULL AND ur.server_id = ?)
-              OR ur.channel_id = ?
-            )
+            AND (ur.channel_id IS NULL OR ur.channel_id = ?)
           ORDER BY r.level DESC
-        `).all(...memberIds, channel.server_id, channel.id);
+        `).all(...memberIds, channel.id);
         roleRows.forEach(row => {
           if (!userRolesMap[row.user_id]) userRolesMap[row.user_id] = [];
           userRolesMap[row.user_id].push({
@@ -5927,9 +4962,7 @@ function setupSocketHandlers(io, db) {
             name: row.name,
             level: row.level,
             color: row.color,
-            serverId: row.server_id || null,
-            channelId: row.channel_id || null,
-            scope: row.channel_id ? 'channel' : (row.server_id ? 'subserver' : 'server')
+            scope: row.channel_id ? 'channel' : 'server'
           });
         });
       }
@@ -5950,13 +4983,12 @@ function setupSocketHandlers(io, db) {
     socket.on('create-role', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can create roles' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can create roles' });
 
       const name = isString(data.name, 1, 30) ? data.name.trim() : '';
       if (!name) return cb({ error: 'Role name required (1-30 chars)' });
 
-      const isCosmetic = !!data.isCosmetic;
-      const level = isInt(data.level) && data.level >= (isCosmetic ? 0 : 1) && data.level <= 99 ? data.level : (isCosmetic ? 0 : 25);
+      const level = isInt(data.level) && data.level >= 1 && data.level <= 99 ? data.level : 25;
       const scope = data.scope === 'channel' ? 'channel' : 'server';
       const color = isString(data.color, 4, 7) && /^#[0-9a-fA-F]{3,6}$/.test(data.color) ? data.color : null;
       const autoAssign = data.autoAssign ? 1 : 0;
@@ -5966,19 +4998,19 @@ function setupSocketHandlers(io, db) {
         if (autoAssign) {
           db.prepare('UPDATE roles SET auto_assign = 0').run();
         }
-        const result = db.prepare('INSERT INTO roles (name, level, scope, color, auto_assign, is_cosmetic) VALUES (?, ?, ?, ?, ?, ?)').run(name, level, scope, color, autoAssign, isCosmetic ? 1 : 0);
+        const result = db.prepare('INSERT INTO roles (name, level, scope, color, auto_assign) VALUES (?, ?, ?, ?, ?)').run(name, level, scope, color, autoAssign);
 
         // Add permissions
         const perms = Array.isArray(data.permissions) ? data.permissions : [];
-        const validPerms = VALID_ROLE_PERMS;
-        // Escalation guard: non-admins cannot grant permissions they don't have
-        const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'];
+        const validPerms = [
+          'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
+          'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
+          'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+          'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+          'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard'
+        ];
         const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
-        perms.forEach(p => {
-          if (!validPerms.includes(p)) return;
-          if (!socket.user.isAdmin && (adminOnlyPerms.includes(p) || !userHasPermission(socket.user.id, p))) return;
-          insertPerm.run(result.lastInsertRowid, p);
-        });
+        perms.forEach(p => { if (validPerms.includes(p)) insertPerm.run(result.lastInsertRowid, p); });
 
         cb({ success: true, roleId: result.lastInsertRowid });
       } catch (err) {
@@ -5990,7 +5022,7 @@ function setupSocketHandlers(io, db) {
     socket.on('update-role', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can edit roles' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can edit roles' });
 
       const roleId = isInt(data.roleId) ? data.roleId : null;
       if (!roleId) return;
@@ -6005,7 +5037,7 @@ function setupSocketHandlers(io, db) {
         const values = [];
 
         if (isString(data.name, 1, 30)) { updates.push('name = ?'); values.push(data.name.trim()); }
-        if (isInt(data.level) && data.level >= 0 && data.level <= 99) { updates.push('level = ?'); values.push(data.level); }
+        if (isInt(data.level) && data.level >= 1 && data.level <= 99) { updates.push('level = ?'); values.push(data.level); }
         if (data.color !== undefined) {
           const safeColor = (isString(data.color, 4, 7) && /^#[0-9a-fA-F]{3,6}$/.test(data.color)) ? data.color : null;
           updates.push('color = ?'); values.push(safeColor);
@@ -6015,9 +5047,6 @@ function setupSocketHandlers(io, db) {
             db.prepare('UPDATE roles SET auto_assign = 0').run();
           }
           updates.push('auto_assign = ?'); values.push(data.autoAssign ? 1 : 0);
-        }
-        if (data.isCosmetic !== undefined) {
-          updates.push('is_cosmetic = ?'); values.push(data.isCosmetic ? 1 : 0);
         }
         if (data.linkChannelAccess !== undefined) {
           updates.push('link_channel_access = ?'); values.push(data.linkChannelAccess ? 1 : 0);
@@ -6030,16 +5059,16 @@ function setupSocketHandlers(io, db) {
 
         // Update permissions
         if (Array.isArray(data.permissions)) {
-          const validPerms = [...VALID_ROLE_PERMS];
-          // Escalation guard: non-admins cannot grant permissions they don't have
-          const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'];
+          const validPerms = [
+            'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
+            'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
+            'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+            'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+            'promote_user', 'transfer_admin', 'archive_messages', 'create_channel', 'manage_emojis', 'manage_soundboard'
+          ];
           db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(roleId);
           const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
-          data.permissions.forEach(p => {
-            if (!validPerms.includes(p)) return;
-            if (!socket.user.isAdmin && (adminOnlyPerms.includes(p) || !userHasPermission(socket.user.id, p))) return;
-            insertPerm.run(roleId, p);
-          });
+          data.permissions.forEach(p => { if (validPerms.includes(p)) insertPerm.run(roleId, p); });
         }
       });
       updateRoleTx();
@@ -6062,7 +5091,7 @@ function setupSocketHandlers(io, db) {
     socket.on('delete-role', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can delete roles' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can delete roles' });
 
       const roleId = isInt(data.roleId) ? data.roleId : null;
       if (!roleId) return;
@@ -6076,60 +5105,13 @@ function setupSocketHandlers(io, db) {
       cb({ success: true });
     });
 
-    // ── Reset Roles to Default ────────────────────────────
-    socket.on('reset-roles-to-default', (data, callback) => {
-      const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin) return cb({ error: 'Only admins can reset roles' });
-
-      try {
-        // Wipe all existing roles & related data
-        db.exec('DELETE FROM user_roles');
-        db.exec('DELETE FROM role_permissions');
-        db.exec('DELETE FROM role_channel_access');
-        db.exec('DELETE FROM roles');
-
-        // Re-seed defaults (mirrors database.js init)
-        const insertRole = db.prepare('INSERT INTO roles (name, level, scope, color) VALUES (?, ?, ?, ?)');
-        const insertPerm = db.prepare('INSERT INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
-
-        const serverMod = insertRole.run('Server Mod', 50, 'server', '#3498db');
-        ['kick_user','mute_user','delete_message','pin_message','set_channel_topic','manage_sub_channels','rename_channel','rename_sub_channel','create_forum_posts','delete_lower_messages','manage_webhooks','upload_files','use_voice','view_history','view_all_members','manage_music_queue','delete_own_messages','edit_own_messages']
-          .forEach(p => insertPerm.run(serverMod.lastInsertRowid, p));
-
-        const channelMod = insertRole.run('Channel Mod', 25, 'channel', '#2ecc71');
-        ['kick_user','mute_user','delete_message','pin_message','manage_sub_channels','rename_sub_channel','create_forum_posts','delete_lower_messages','upload_files','use_voice','view_history','manage_music_queue','delete_own_messages','edit_own_messages']
-          .forEach(p => insertPerm.run(channelMod.lastInsertRowid, p));
-
-        const userRole = insertRole.run('User', 1, 'server', '#95a5a6');
-        db.prepare('UPDATE roles SET auto_assign = 1 WHERE id = ?').run(userRole.lastInsertRowid);
-        ['delete_own_messages','edit_own_messages','upload_files','use_voice','view_history','use_tts','create_forum_posts']
-          .forEach(p => insertPerm.run(userRole.lastInsertRowid, p));
-
-        // Auto-assign the User role to all existing users
-        const autoRoles = db.prepare('SELECT id FROM roles WHERE auto_assign = 1 AND scope = ?').all('server');
-        const mainServerId = getMainServer()?.id || null;
-        for (const ar of autoRoles) {
-          db.prepare(`
-            INSERT OR IGNORE INTO user_roles (user_id, role_id, server_id, channel_id, granted_by)
-            SELECT u.id, ?, ?, NULL, NULL FROM users u
-          `).run(ar.id, mainServerId);
-        }
-
-        for (const [code] of channelUsers) { emitOnlineUsers(code); }
-        io.emit('roles-updated');
-        cb({ success: true });
-      } catch (err) {
-        cb({ error: 'Failed to reset roles: ' + err.message });
-      }
-    });
-
     // ═══════════════ CENTRALIZED ROLE ASSIGNMENT ═══════════
     // Three-pane role assignment data: returns users, shared channels, and role options
     // filtered by the caller's permissions and level hierarchy.
     socket.on('get-role-assignment-data', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'promote_user') && !userHasPermission(socket.user.id, 'manage_roles')) {
+      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'promote_user')) {
         return cb({ error: 'You lack permission to manage roles' });
       }
 
@@ -6140,7 +5122,7 @@ function setupSocketHandlers(io, db) {
 
         // Get all channels the caller has access to (non-DM)
         const callerChannels = db.prepare(`
-          SELECT c.id, c.name, c.code, c.server_id, c.parent_channel_id, c.position
+          SELECT c.id, c.name, c.code, c.parent_channel_id, c.position
           FROM channels c
           JOIN channel_members cm ON c.id = cm.channel_id
           WHERE cm.user_id = ? AND c.is_dm = 0
@@ -6195,7 +5177,7 @@ function setupSocketHandlers(io, db) {
 
           // Get the user's current roles (all scopes)
           const currentRoles = db.prepare(`
-            SELECT ur.role_id, ur.server_id, ur.channel_id, r.name, COALESCE(ur.custom_level, r.level) as level, r.color, r.scope
+            SELECT ur.role_id, ur.channel_id, r.name, r.level, r.color
             FROM user_roles ur
             JOIN roles r ON ur.role_id = r.id
             WHERE ur.user_id = ?
@@ -6218,7 +5200,6 @@ function setupSocketHandlers(io, db) {
           id: c.id,
           name: c.name,
           code: c.code,
-          serverId: c.server_id,
           parentId: c.parent_channel_id,
           position: c.position
         }));
@@ -6279,14 +5260,6 @@ function setupSocketHandlers(io, db) {
       }
 
       const channelId = isInt(data.channelId) ? data.channelId : null;
-      const serverId = isInt(data.serverId) ? data.serverId : null;
-      if (channelId && serverId) return cb({ error: 'Choose either a server or channel scope, not both' });
-      if (serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(serverId)) {
-        return cb({ error: 'Server not found' });
-      }
-      if (channelId && !db.prepare('SELECT 1 FROM channels WHERE id = ?').get(channelId)) {
-        return cb({ error: 'Channel not found' });
-      }
 
       // Custom level: allow caller to set a custom level (must be < caller's level)
       let assignLevel = role.level;
@@ -6308,29 +5281,18 @@ function setupSocketHandlers(io, db) {
         // assigning "User" server-wide removes "Jester" server-wide, etc.
         if (channelId) {
           db.prepare('DELETE FROM user_roles WHERE user_id = ? AND channel_id = ?').run(userId, channelId);
-        } else if (serverId) {
-          db.prepare('DELETE FROM user_roles WHERE user_id = ? AND channel_id IS NULL AND server_id = ?').run(userId, serverId);
         } else {
-          db.prepare('DELETE FROM user_roles WHERE user_id = ? AND channel_id IS NULL AND server_id IS NULL').run(userId);
+          db.prepare('DELETE FROM user_roles WHERE user_id = ? AND channel_id IS NULL').run(userId);
         }
-        db.prepare('INSERT INTO user_roles (user_id, role_id, server_id, channel_id, granted_by, custom_level) VALUES (?, ?, ?, ?, ?, ?)').run(
-          userId,
-          roleId,
-          serverId,
-          channelId,
-          socket.user.id,
-          assignLevel !== role.level ? assignLevel : null
-        );
+        db.prepare('INSERT INTO user_roles (user_id, role_id, channel_id, granted_by, custom_level) VALUES (?, ?, ?, ?, ?)').run(userId, roleId, channelId, socket.user.id, assignLevel !== role.level ? assignLevel : null);
 
         // Custom permissions: if provided, store per-user overrides
         if (data.customPerms && Array.isArray(data.customPerms)) {
           // Clear existing custom permission overrides for this user+role+scope
           if (channelId) {
             db.prepare('DELETE FROM user_role_perms WHERE user_id = ? AND role_id = ? AND channel_id = ?').run(userId, roleId, channelId);
-          } else if (serverId) {
-            db.prepare('DELETE FROM user_role_perms WHERE user_id = ? AND role_id = ? AND channel_id IS NULL AND server_id = ?').run(userId, roleId, serverId);
           } else {
-            db.prepare('DELETE FROM user_role_perms WHERE user_id = ? AND role_id = ? AND channel_id IS NULL AND server_id IS NULL').run(userId, roleId);
+            db.prepare('DELETE FROM user_role_perms WHERE user_id = ? AND role_id = ? AND channel_id IS NULL').run(userId, roleId);
           }
           // Only store overrides if they differ from the role's default permissions
           const rolePerms = db.prepare('SELECT permission FROM role_permissions WHERE role_id = ? AND allowed = 1').all(roleId).map(r => r.permission);
@@ -6338,12 +5300,12 @@ function setupSocketHandlers(io, db) {
           const added = customPerms.filter(p => !rolePerms.includes(p));
           const removed = rolePerms.filter(p => !customPerms.includes(p));
           if (added.length > 0 || removed.length > 0) {
-            const insertStmt = db.prepare('INSERT INTO user_role_perms (user_id, role_id, server_id, channel_id, permission, allowed) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertStmt = db.prepare('INSERT INTO user_role_perms (user_id, role_id, channel_id, permission, allowed) VALUES (?, ?, ?, ?, ?)');
             for (const p of added) {
-              insertStmt.run(userId, roleId, serverId, channelId, p, 1);
+              insertStmt.run(userId, roleId, channelId, p, 1);
             }
             for (const p of removed) {
-              insertStmt.run(userId, roleId, serverId, channelId, p, 0);
+              insertStmt.run(userId, roleId, channelId, p, 0);
             }
           }
         }
@@ -6397,17 +5359,14 @@ function setupSocketHandlers(io, db) {
       }
 
       const channelId = isInt(data.channelId) ? data.channelId : null;
-      const serverId = isInt(data.serverId) ? data.serverId : null;
 
       // Apply role-linked channel access (revoke channels on demote) BEFORE removing the role
       applyRoleChannelAccess(roleId, userId, 'revoke');
 
       if (channelId) {
         db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ? AND channel_id = ?').run(userId, roleId, channelId);
-      } else if (serverId) {
-        db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ? AND channel_id IS NULL AND server_id = ?').run(userId, roleId, serverId);
       } else {
-        db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ? AND channel_id IS NULL AND server_id IS NULL').run(userId, roleId);
+        db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ? AND channel_id IS NULL').run(userId, roleId);
       }
 
       const target = db.prepare('SELECT COALESCE(display_name, username) as username FROM users WHERE id = ?').get(userId);
@@ -6455,7 +5414,7 @@ function setupSocketHandlers(io, db) {
     socket.on('get-role-channel-access', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can view role channel access' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can view role channel access' });
 
       const roleId = isInt(data.roleId) ? data.roleId : null;
       if (!roleId) return cb({ error: 'Invalid role ID' });
@@ -6469,7 +5428,7 @@ function setupSocketHandlers(io, db) {
     socket.on('update-role-channel-access', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can edit role channel access' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can edit role channel access' });
 
       const roleId = isInt(data.roleId) ? data.roleId : null;
       if (!roleId) return cb({ error: 'Invalid role ID' });
@@ -6504,7 +5463,7 @@ function setupSocketHandlers(io, db) {
     socket.on('reapply-role-access', (data, callback) => {
       if (!data || typeof data !== 'object') return;
       const cb = typeof callback === 'function' ? callback : () => {};
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'manage_roles')) return cb({ error: 'Only admins can reapply access' });
+      if (!socket.user.isAdmin) return cb({ error: 'Only admins can reapply access' });
 
       const roleId = isInt(data.roleId) ? data.roleId : null;
       if (!roleId) return cb({ error: 'Invalid role ID' });
@@ -6643,7 +5602,13 @@ function setupSocketHandlers(io, db) {
             const r = db.prepare("INSERT INTO roles (name, level, scope, color) VALUES ('Former Admin', 99, 'server', '#e74c3c')").run();
             formerAdminRole = { id: r.lastInsertRowid };
             // Give all permissions
-            const allPerms = [...VALID_ROLE_PERMS];
+            const allPerms = [
+              'kick_user', 'mute_user', 'ban_user', 'delete_message', 'delete_own_messages',
+              'delete_lower_messages', 'edit_own_messages', 'pin_message', 'set_channel_topic',
+              'manage_sub_channels', 'rename_channel', 'rename_sub_channel',
+              'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+              'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
+            ];
             const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission, allowed) VALUES (?, ?, 1)');
             allPerms.forEach(p => insertPerm.run(formerAdminRole.id, p));
           }
@@ -6710,7 +5675,7 @@ function setupSocketHandlers(io, db) {
       if (!name || name.length === 0 || name.length > 50) {
         return socket.emit('error-msg', 'Channel name must be 1-50 characters');
       }
-      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
+      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
         return socket.emit('error-msg', 'Channel name contains invalid characters');
       }
 
@@ -6755,7 +5720,7 @@ function setupSocketHandlers(io, db) {
       if (!name || name.length === 0 || name.length > 50) {
         return socket.emit('error-msg', 'Sub-channel name must be 1-50 characters');
       }
-      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(name)) {
+      if (!/^[\w\s\-!?.,']+$/i.test(name)) {
         return socket.emit('error-msg', 'Sub-channel name contains invalid characters');
       }
 
@@ -6782,8 +5747,8 @@ function setupSocketHandlers(io, db) {
 
       try {
         const result = db.prepare(
-          'INSERT INTO channels (name, code, server_id, created_by, parent_channel_id, position, is_private, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(name, code, parentChannel.server_id || null, socket.user.id, parentChannel.id, position, isPrivate, expiresAt);
+          'INSERT INTO channels (name, code, created_by, parent_channel_id, position, is_private, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(name, code, socket.user.id, parentChannel.id, position, isPrivate, expiresAt);
 
         // Auto-join all members of the parent channel (even for private — creator controls who's in)
         const parentMembers = db.prepare('SELECT user_id FROM channel_members WHERE channel_id = ?').all(parentChannel.id);
@@ -6823,12 +5788,8 @@ function setupSocketHandlers(io, db) {
         db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(channel.id);
         db.prepare('DELETE FROM channels WHERE id = ?').run(channel.id);
 
-        // Immediate refresh so the deleted sub-channel disappears right away
-        for (const [, s] of io.sockets.sockets) {
-          if (!s.user) continue;
-          s.leave(`channel:${code}`);
-          s.emit('channels-list', getEnrichedChannels(s.user.id, s.user.isAdmin, null));
-        }
+        // Broadcast enriched channel list
+        broadcastChannelLists();
 
         socket.emit('error-msg', `Sub-channel deleted`);
       } catch (err) {
@@ -6840,325 +5801,6 @@ function setupSocketHandlers(io, db) {
     // ═══════════════════════════════════════════════════════════
     // CHANNEL FEATURE TOGGLES (streams, music, slow mode)
     // ═══════════════════════════════════════════════════════════
-
-    socket.on('get-forum-overview', (data) => {
-      if (!data || typeof data !== 'object') return;
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
-
-      const parent = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!parent || parent.channel_type !== 'forum') return;
-
-      const isParentMember = socket.user.isAdmin
-        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
-      if (!isParentMember) return socket.emit('error-msg', 'Join this forum channel first');
-      const canCreate = socket.user.isAdmin
-        || userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
-        || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-        || userHasPermission(socket.user.id, 'create_channel', parent.id);
-
-      const posts = db.prepare(`
-        SELECT c.id, c.code, c.name, c.category, c.is_private, c.created_at, c.created_by, c.is_closed, c.closed_at,
-               (SELECT MAX(m.id) FROM messages m WHERE m.channel_id = c.id) AS latest_message_id,
-               (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.id) AS latest_message_at,
-               COALESCE(u.display_name, u.username, 'Unknown') as author
-        FROM channels c
-        LEFT JOIN users u ON c.created_by = u.id
-        WHERE c.parent_channel_id = ?
-        ORDER BY COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.channel_id = c.id), c.id) DESC, c.position, c.id DESC
-      `).all(parent.id).map(post => {
-        const isMember = socket.user.isAdmin
-          || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(post.id, socket.user.id);
-        if (post.is_private && !isMember && !socket.user.isAdmin) return null;
-        const originalPost = db.prepare(`
-          SELECT m.content
-          FROM messages m
-          JOIN pinned_messages pm ON pm.message_id = m.id
-          WHERE pm.channel_id = ?
-          ORDER BY pm.pinned_at ASC
-          LIMIT 1
-        `).get(post.id);
-        const latestId = db.prepare('SELECT MAX(id) as latest_id FROM messages WHERE channel_id = ?').get(post.id)?.latest_id || 0;
-        const messageCount = db.prepare('SELECT COUNT(*) as cnt FROM messages WHERE channel_id = ?').get(post.id)?.cnt || 0;
-        const lastRead = db.prepare('SELECT last_read_message_id FROM read_positions WHERE user_id = ? AND channel_id = ?').get(socket.user.id, post.id)?.last_read_message_id || 0;
-        const canDelete = socket.user.isAdmin
-          || (socket.user.effectiveLevel || 0) >= 25
-          || post.created_by === socket.user.id
-          || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-          || userHasPermission(socket.user.id, 'delete_message', post.id);
-        const canManage = socket.user.isAdmin
-          || post.created_by === socket.user.id
-          || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-          || userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
-          || userHasPermission(socket.user.id, 'create_channel', parent.id);
-        return {
-          id: post.id,
-          code: post.code,
-          name: post.name,
-          tag: post.category || '',
-          isPrivate: !!post.is_private,
-          isMember,
-          author: post.author,
-          preview: sanitizeText(originalPost?.content || '').slice(0, 180),
-          messageCount,
-          canDelete,
-          canEdit: canManage,
-          canClose: canManage,
-          isClosed: !!post.is_closed,
-          latestMessageId: post.latest_message_id || 0,
-          latestMessageAt: post.latest_message_at || post.created_at,
-          unreadCount: latestId > lastRead
-            ? (db.prepare('SELECT COUNT(*) as cnt FROM messages WHERE channel_id = ? AND id > ? AND user_id != ?').get(post.id, lastRead, socket.user.id)?.cnt || 0)
-            : 0
-        };
-      }).filter(Boolean);
-
-      socket.emit('forum-overview', {
-        code: parent.code,
-        name: parent.name,
-        topic: parent.topic || '',
-        canCreate,
-        posts
-      });
-    });
-
-    socket.on('join-forum-post', (data, cb) => {
-      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb?.({ error: 'Invalid post code' });
-
-      const post = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!post || !post.parent_channel_id) return cb?.({ error: 'Forum post not found' });
-      const parent = db.prepare('SELECT * FROM channels WHERE id = ?').get(post.parent_channel_id);
-      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum post not found' });
-
-      const isParentMember = socket.user.isAdmin
-        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
-      if (!isParentMember) return cb?.({ error: 'Join the parent forum first' });
-
-      db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(post.id, socket.user.id);
-      socket.join(`channel:${post.code}`);
-
-      const channel = db.prepare(`
-        SELECT c.id, c.name, c.code, COALESCE(c.server_id, p.server_id) AS server_id, c.created_by, c.topic, c.is_dm,
-               c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
-               c.parent_channel_id, c.position, c.is_private, c.expires_at,
-               c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-               c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate,
-               c.is_closed, c.closed_at
-        FROM channels c
-        LEFT JOIN channels p ON p.id = c.parent_channel_id
-        WHERE c.id = ?
-      `).get(post.id);
-      if (channel) channel.display_code = channel.code;
-      cb?.({ ok: true, channel });
-      broadcastChannelLists();
-    });
-
-    socket.on('block-user', (data) => {
-      const targetId = isInt(data?.userId) ? data.userId : null;
-      if (!targetId || targetId === socket.user.id) return;
-      db.prepare('INSERT OR IGNORE INTO user_blocks (user_id, blocked_user_id) VALUES (?, ?)').run(socket.user.id, targetId);
-      db.prepare('DELETE FROM user_mutes WHERE user_id = ? AND muted_user_id = ?').run(socket.user.id, targetId);
-      socket.emit('user-relations-updated', {
-        blockedUserIds: getBlockedUserIds(socket.user.id),
-        mutedUserIds: getMutedUserIds(socket.user.id)
-      });
-    });
-
-    socket.on('unblock-user', (data) => {
-      const targetId = isInt(data?.userId) ? data.userId : null;
-      if (!targetId) return;
-      db.prepare('DELETE FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?').run(socket.user.id, targetId);
-      socket.emit('user-relations-updated', {
-        blockedUserIds: getBlockedUserIds(socket.user.id),
-        mutedUserIds: getMutedUserIds(socket.user.id)
-      });
-    });
-
-    socket.on('mute-user-personal', (data) => {
-      const targetId = isInt(data?.userId) ? data.userId : null;
-      if (!targetId || targetId === socket.user.id) return;
-      db.prepare('INSERT OR IGNORE INTO user_mutes (user_id, muted_user_id) VALUES (?, ?)').run(socket.user.id, targetId);
-      socket.emit('user-relations-updated', {
-        blockedUserIds: getBlockedUserIds(socket.user.id),
-        mutedUserIds: getMutedUserIds(socket.user.id)
-      });
-    });
-
-    socket.on('unmute-user-personal', (data) => {
-      const targetId = isInt(data?.userId) ? data.userId : null;
-      if (!targetId) return;
-      db.prepare('DELETE FROM user_mutes WHERE user_id = ? AND muted_user_id = ?').run(socket.user.id, targetId);
-      socket.emit('user-relations-updated', {
-        blockedUserIds: getBlockedUserIds(socket.user.id),
-        mutedUserIds: getMutedUserIds(socket.user.id)
-      });
-    });
-
-    socket.on('create-forum-post', (data, cb) => {
-      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
-      const parentCode = typeof data.parentCode === 'string' ? data.parentCode.trim() : '';
-      const title = typeof data.title === 'string' ? data.title.trim() : '';
-      const tag = typeof data.tag === 'string' ? data.tag.trim().slice(0, 30) : '';
-      const body = typeof data.body === 'string' ? sanitizeText(data.body.trim()).slice(0, 2000) : '';
-      if (!parentCode || !/^[a-f0-9]{8}$/i.test(parentCode)) return cb?.({ error: 'Invalid forum channel' });
-      if (!title || title.length > 50) return cb?.({ error: 'Title must be 1-50 characters' });
-      if (!body) return cb?.({ error: 'Original post is required' });
-      if (!/^[\w\s\-!?.,'\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/iu.test(title)) {
-        return cb?.({ error: 'Post title contains invalid characters' });
-      }
-
-      const parent = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(parentCode);
-      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum channel not found' });
-      const isParentMember = socket.user.isAdmin
-        || !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(parent.id, socket.user.id);
-      if (!isParentMember) return cb?.({ error: 'Join the parent forum first' });
-      if (!socket.user.isAdmin
-        && !userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
-        && !userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-        && !userHasPermission(socket.user.id, 'create_channel', parent.id)) {
-        return cb?.({ error: 'You do not have permission to create forum posts' });
-      }
-
-      const code = generateChannelCode();
-      const maxPos = db.prepare('SELECT MAX(position) as mp FROM channels WHERE parent_channel_id = ?').get(parent.id);
-      const position = (maxPos && maxPos.mp != null) ? maxPos.mp + 1 : 0;
-
-      try {
-        const result = db.prepare(`
-          INSERT INTO channels (name, code, server_id, created_by, parent_channel_id, position, is_private, expires_at, category)
-          VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?)
-        `).run(title, code, parent.server_id || null, socket.user.id, parent.id, position, tag || null);
-
-        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(result.lastInsertRowid, socket.user.id);
-        socket.join(`channel:${code}`);
-
-        const messageResult = db.prepare(`
-          INSERT INTO messages (channel_id, user_id, content)
-          VALUES (?, ?, ?)
-        `).run(result.lastInsertRowid, socket.user.id, body);
-        db.prepare('INSERT INTO pinned_messages (message_id, channel_id, pinned_by) VALUES (?, ?, ?)').run(messageResult.lastInsertRowid, result.lastInsertRowid, socket.user.id);
-
-        const channel = db.prepare(`
-          SELECT c.id, c.name, c.code, COALESCE(c.server_id, p.server_id) AS server_id, c.created_by, c.topic, c.is_dm,
-                 c.code_visibility, c.code_mode, c.code_rotation_type, c.code_rotation_interval,
-                 c.parent_channel_id, c.position, c.is_private, c.expires_at,
-                 c.streams_enabled, c.music_enabled, c.media_enabled, c.slow_mode_interval, c.category, c.sort_alphabetical,
-                 c.cleanup_exempt, c.channel_type, c.voice_user_limit, c.notification_type, c.voice_enabled, c.text_enabled, c.voice_bitrate,
-                 c.is_closed, c.closed_at
-          FROM channels c
-          LEFT JOIN channels p ON p.id = c.parent_channel_id
-          WHERE c.id = ?
-        `).get(result.lastInsertRowid);
-        if (channel) channel.display_code = channel.code;
-
-        cb?.({ ok: true, channel });
-        broadcastChannelLists();
-        io.to(`channel:${parent.code}`).emit('forum-post-created', { parentCode: parent.code, code });
-      } catch (err) {
-        console.error('Create forum post error:', err);
-        cb?.({ error: 'Failed to create forum post' });
-      }
-    });
-
-    socket.on('delete-forum-post', (data, cb) => {
-      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb?.({ error: 'Invalid forum post' });
-
-      const post = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!post || !post.parent_channel_id) return cb?.({ error: 'Forum post not found' });
-
-      const parent = db.prepare('SELECT * FROM channels WHERE id = ?').get(post.parent_channel_id);
-      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum post not found' });
-
-      const canDelete = socket.user.isAdmin
-        || (socket.user.effectiveLevel || 0) >= 25
-        || post.created_by === socket.user.id
-        || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-        || userHasPermission(socket.user.id, 'delete_message', post.id);
-      if (!canDelete) return cb?.({ error: 'You do not have permission to delete this forum post' });
-
-      try {
-        const deleteAll = db.transaction((chId) => {
-          db.prepare('DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?)').run(chId);
-          db.prepare('DELETE FROM pinned_messages WHERE channel_id = ?').run(chId);
-          db.prepare('DELETE FROM messages WHERE channel_id = ?').run(chId);
-          db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(chId);
-          db.prepare('DELETE FROM channels WHERE id = ?').run(chId);
-        });
-        deleteAll(post.id);
-
-        io.to(`channel:${code}`).emit('channel-deleted', { code });
-        io.to(`channel:${parent.code}`).emit('forum-post-deleted', { parentCode: parent.code, code });
-        channelUsers.delete(code);
-        voiceUsers.delete(code);
-        broadcastChannelLists();
-        cb?.({ ok: true, parentCode: parent.code, code });
-      } catch (err) {
-        console.error('Delete forum post error:', err);
-        cb?.({ error: 'Failed to delete forum post' });
-      }
-    });
-
-    socket.on('update-forum-post-meta', (data, cb) => {
-      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      const title = typeof data.title === 'string' ? data.title.trim() : '';
-      const tag = typeof data.tag === 'string' ? data.tag.trim().slice(0, 30) : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb?.({ error: 'Invalid forum post' });
-      if (!title || title.length > 50) return cb?.({ error: 'Title must be 1-50 characters' });
-
-      const post = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!post || !post.parent_channel_id) return cb?.({ error: 'Forum post not found' });
-      const parent = db.prepare('SELECT * FROM channels WHERE id = ?').get(post.parent_channel_id);
-      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum post not found' });
-
-      const canManage = socket.user.isAdmin
-        || post.created_by === socket.user.id
-        || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-        || userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
-        || userHasPermission(socket.user.id, 'create_channel', parent.id);
-      if (!canManage) return cb?.({ error: 'You do not have permission to edit this post' });
-
-      db.prepare('UPDATE channels SET name = ?, category = ? WHERE id = ?').run(title, tag || null, post.id);
-      cb?.({ ok: true, parentCode: parent.code, code });
-      io.to(`channel:${parent.code}`).emit('forum-post-updated', { parentCode: parent.code, code });
-      broadcastChannelLists();
-    });
-
-    socket.on('set-forum-post-closed', (data, cb) => {
-      if (!data || typeof data !== 'object') return cb?.({ error: 'Invalid request' });
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      const closed = !!data.closed;
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return cb?.({ error: 'Invalid forum post' });
-
-      const post = db.prepare('SELECT * FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!post || !post.parent_channel_id) return cb?.({ error: 'Forum post not found' });
-      const parent = db.prepare('SELECT * FROM channels WHERE id = ?').get(post.parent_channel_id);
-      if (!parent || parent.channel_type !== 'forum') return cb?.({ error: 'Forum post not found' });
-
-      const canManage = socket.user.isAdmin
-        || post.created_by === socket.user.id
-        || userHasPermission(socket.user.id, 'manage_sub_channels', parent.id)
-        || userHasPermission(socket.user.id, 'create_forum_posts', parent.id)
-        || userHasPermission(socket.user.id, 'create_channel', parent.id);
-      if (!canManage) return cb?.({ error: 'You do not have permission to update this post' });
-
-      db.prepare(`
-        UPDATE channels
-        SET is_closed = ?,
-            closed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END,
-            closed_by = CASE WHEN ? = 1 THEN ? ELSE NULL END
-        WHERE id = ?
-      `).run(closed ? 1 : 0, closed ? 1 : 0, closed ? 1 : 0, socket.user.id, post.id);
-
-      cb?.({ ok: true, parentCode: parent.code, code, closed });
-      io.to(`channel:${parent.code}`).emit('forum-post-updated', { parentCode: parent.code, code, closed });
-      io.to(`channel:${code}`).emit('forum-post-state', { code, closed });
-      broadcastChannelLists();
-    });
 
     socket.on('toggle-channel-permission', (data) => {
       if (!data || typeof data !== 'object') return;
@@ -7311,37 +5953,6 @@ function setupSocketHandlers(io, db) {
       } catch (err) {
         console.error('Set voice user limit error:', err);
         socket.emit('error-msg', 'Failed to set voice user limit');
-      }
-    });
-
-    // ── Set voice audio bitrate cap ─────────────────────────
-    socket.on('set-voice-bitrate', (data) => {
-      if (!data || typeof data !== 'object') return;
-      // Admin, server mod, or channel mod can change bitrate
-      if (!socket.user.isAdmin && !userHasPermission(socket.user.id, 'create_channel')) {
-        return socket.emit('error-msg', 'You don\'t have permission to change voice bitrate');
-      }
-      const code = typeof data.code === 'string' ? data.code.trim() : '';
-      if (!code || !/^[a-f0-9]{8}$/i.test(code)) return;
-
-      const bitrate = typeof data.bitrate === 'number' ? data.bitrate : parseInt(data.bitrate);
-      const validBitrates = [0, 32, 64, 96, 128, 256, 512];
-      if (!validBitrates.includes(bitrate)) {
-        return socket.emit('error-msg', 'Invalid bitrate value');
-      }
-
-      const channel = db.prepare('SELECT id FROM channels WHERE code = ? AND is_dm = 0').get(code);
-      if (!channel) return socket.emit('error-msg', 'Channel not found');
-
-      try {
-        db.prepare('UPDATE channels SET voice_bitrate = ? WHERE id = ?').run(bitrate, channel.id);
-        broadcastChannelLists();
-        // Notify all voice users so they can adjust their senders in real time
-        io.to(`voice:${code}`).emit('voice-bitrate-updated', { code, bitrate });
-        socket.emit('toast', { message: bitrate > 0 ? `🎙️ Voice bitrate set to ${bitrate} kbps` : '🎙️ Voice bitrate set to auto', type: 'success' });
-      } catch (err) {
-        console.error('Set voice bitrate error:', err);
-        socket.emit('error-msg', 'Failed to set voice bitrate');
       }
     });
 
@@ -7693,13 +6304,7 @@ function setupSocketHandlers(io, db) {
         afk:       () => ({ content: `💤 ${username} is away from keyboard` }),
         me:        () => arg ? ({ content: `_${username} ${arg}_` }) : null,
         spoiler:   () => arg ? ({ content: `||${arg}||` }) : null,
-        tts:       () => {
-          if (!arg) return null;
-          if (!userHasPermission(socket.user.id, 'use_tts')) return { content: '_You do not have permission to use TTS._' };
-          // Cap TTS content length to prevent abuse
-          const ttsContent = arg.length > 500 ? arg.slice(0, 500) + '…' : arg;
-          return { content: ttsContent, tts: true };
-        },
+        tts:       () => arg ? ({ content: arg, tts: true }) : null,
         flip:      () => ({ content: `🪙 ${username} flipped a coin: **${Math.random() < 0.5 ? 'Heads' : 'Tails'}**!` }),
         roll:      () => {
           const m = (arg || '1d6').match(/^(\d{1,2})?d(\d{1,4})$/i);
