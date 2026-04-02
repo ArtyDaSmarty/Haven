@@ -1,35 +1,3 @@
-//Shared permission list instead of declaring the same multiple times
-const ALL_PERMS = [
-  'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
-  'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
-  'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
-  'create_channel', 'create_forum_posts', 'upload_files', 'use_voice', 'use_tts', 'manage_webhooks', 'mention_everyone', 'view_history',
-  'view_all_members', 'manage_emojis', 'manage_soundboard', 'manage_music_queue', 'promote_user', 'transfer_admin',
-  'manage_roles', 'manage_server', 'create_server', 'delete_channel'
-];
-
-//Similarly flavored solution to perm labels
-const PERM_LABELS = {
-  edit_own_messages: 'Edit Own Messages', delete_own_messages: 'Delete Own Messages',
-  delete_message: 'Delete Any Message', delete_lower_messages: 'Delete Lower-level Messages',
-  pin_message: 'Pin Messages', archive_messages: 'Protect Messages',
-  kick_user: 'Kick Users', mute_user: 'Mute Users', ban_user: 'Ban Users',
-  rename_channel: 'Rename Channels', rename_sub_channel: 'Rename Sub-channels',
-  set_channel_topic: 'Set Channel Topic', manage_sub_channels: 'Manage Sub-channels',
-  create_channel: 'Create Channels',
-  create_forum_posts: 'Create Forum Posts',
-  upload_files: 'Upload Files', use_voice: 'Use Voice Chat',
-  use_tts: 'Use Text-to-Speech',
-  manage_webhooks: 'Manage Webhooks', mention_everyone: 'Mention @everyone',
-  view_history: 'View Message History',
-  view_all_members: 'View All Server Members',
-  manage_emojis: 'Manage Custom Emojis',
-  manage_soundboard: 'Manage Soundboard',
-  manage_music_queue: 'Manage Music Queue',
-  promote_user: 'Promote Users', transfer_admin: 'Transfer Admin',
-  manage_roles: 'Manage Roles', manage_server: 'Manage Server', create_server: 'Create Servers', delete_channel: 'Delete Channels'
-};
-
 export default {
 
 // ── First-Time Setup Wizard ─────────────────────────────
@@ -81,21 +49,9 @@ _maybeShowSetupWizard() {
   newPort.addEventListener('click', () => this._wizardCheckPort());
   newCopy.addEventListener('click', () => {
     if (this._wizardChannelCode) {
-      const markCopied = () => {
+      navigator.clipboard.writeText(this._wizardChannelCode).then(() => {
         newCopy.textContent = 'Copied!';
         setTimeout(() => newCopy.textContent = 'Copy', 2000);
-      };
-      navigator.clipboard.writeText(this._wizardChannelCode).then(markCopied).catch(() => {
-        try {
-          const ta = document.createElement('textarea');
-          ta.value = this._wizardChannelCode;
-          ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
-          document.body.appendChild(ta);
-          ta.focus(); ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-          markCopied();
-        } catch { /* could not copy */ }
       });
     }
   });
@@ -302,14 +258,6 @@ _applyServerSettings() {
     if (nameInput && this.serverSettings.server_name !== undefined) {
       nameInput.value = this.serverSettings.server_name || '';
     }
-    const titleInput = document.getElementById('server-title-input');
-    if (titleInput && this.serverSettings.server_title !== undefined) {
-      titleInput.value = this.serverSettings.server_title || '';
-    }
-    const versionInput = document.getElementById('server-version-input');
-    if (versionInput && this.serverSettings.display_version !== undefined) {
-      versionInput.value = this.serverSettings.display_version || '2.0';
-    }
     const cleanupEnabled = document.getElementById('cleanup-enabled');
     if (cleanupEnabled) {
       cleanupEnabled.checked = this.serverSettings.cleanup_enabled === 'true';
@@ -322,35 +270,19 @@ _applyServerSettings() {
     if (cleanupSize && this.serverSettings.cleanup_max_size_mb) {
       cleanupSize.value = this.serverSettings.cleanup_max_size_mb;
     }
-    const forumClosedDelete = document.getElementById('forum-closed-delete-days');
-    if (forumClosedDelete && this.serverSettings.forum_closed_delete_days !== undefined) {
-      forumClosedDelete.value = this.serverSettings.forum_closed_delete_days || '0';
-    }
     const maxUpload = document.getElementById('max-upload-mb');
     if (maxUpload) {
       maxUpload.value = this.serverSettings.max_upload_mb || '25';
-    }
-    const maxSoundKb = document.getElementById('max-sound-kb');
-    if (maxSoundKb) {
-      maxSoundKb.value = this.serverSettings.max_sound_kb || '1024';
-    }
-    const maxEmojiKb = document.getElementById('max-emoji-kb');
-    if (maxEmojiKb) {
-      maxEmojiKb.value = this.serverSettings.max_emoji_kb || '256';
-    }
-    const maxProxyAvatarKb = document.getElementById('max-proxy-avatar-kb');
-    if (maxProxyAvatarKb) {
-      maxProxyAvatarKb.value = this.serverSettings.max_proxy_avatar_kb || '256';
-    }
-    const maxPollOpts = document.getElementById('max-poll-options');
-    if (maxPollOpts) {
-      maxPollOpts.value = this.serverSettings.max_poll_options || '10';
     }
     const whitelistToggle = document.getElementById('whitelist-enabled');
     if (whitelistToggle) {
       whitelistToggle.checked = this.serverSettings.whitelist_enabled === 'true';
     }
 
+    const updateBannerAdminOnly = document.getElementById('update-banner-admin-only');
+    if (updateBannerAdminOnly) {
+      updateBannerAdminOnly.checked = this.serverSettings.update_banner_admin_only === 'true';
+    }
     const defaultTheme = document.getElementById('default-theme-select');
     if (defaultTheme) {
       defaultTheme.value = this.serverSettings.default_theme || '';
@@ -376,12 +308,11 @@ _applyServerSettings() {
 
   // Always update visual branding regardless of modal state
   this._applyServerBranding();
-  if (typeof this._refreshSelectedServerSettings === 'function') this._refreshSelectedServerSettings();
 
-  // Re-render channels in case sort mode changed
-  if (!localStorage.getItem('haven_server_sort_mode')) this._renderChannels();
+  // Re-evaluate update banner visibility whenever settings change
+  this._applyUpdateBanner();
 
-  if (!modalOpen && this.user && (this.user.isAdmin || this._hasPerm('manage_server'))) {
+  if (!modalOpen && this.user && this.user.isAdmin) {
     this.socket.emit('get-whitelist');
   }
 },
@@ -407,7 +338,6 @@ _renderWebhooksList(webhooks) {
 
 _syncSettingsNav() {
   const isAdmin = document.getElementById('admin-mod-panel')?.style.display !== 'none';
-  const canManageServer = !!(this.user?.isAdmin || this._hasPerm('manage_server'));
   document.querySelectorAll('.settings-nav-admin').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
@@ -421,42 +351,19 @@ _syncSettingsNav() {
   if (soundsNavItem && !isAdmin && this._hasPerm('manage_soundboard')) {
     soundsNavItem.style.display = '';
   }
-  // Show Roles tab for users with manage_roles permission
-  const rolesNavItem = document.querySelector('.settings-nav-item[data-target="section-roles"]');
-  if (rolesNavItem && !isAdmin && this._hasPerm('manage_roles')) {
-    rolesNavItem.style.display = '';
-  }
-  document.querySelector('.settings-nav-item[data-target="section-invite"]')?.style.setProperty('display', '');
-  document.querySelector('.settings-nav-item[data-target="section-server-customization"]')?.style.setProperty('display', canManageServer ? '' : 'none');
-  document.querySelector('.settings-nav-item[data-target="section-server-channels"]')?.style.setProperty('display', canManageServer ? '' : 'none');
-  const serverCustomization = document.getElementById('section-server-customization');
-  if (serverCustomization) serverCustomization.style.display = canManageServer ? '' : 'none';
-  const serverChannels = document.getElementById('section-server-channels');
-  if (serverChannels) serverChannels.style.display = canManageServer ? '' : 'none';
-  const serverInvite = document.getElementById('section-invite');
-  if (serverInvite) serverInvite.style.display = '';
 },
 
 _snapshotAdminSettings() {
   this._adminSnapshot = {
     server_name: this.serverSettings.server_name || 'HAVEN',
-    server_title: this.serverSettings.server_title || '',
-    display_version: this.serverSettings.display_version || '2.0',
     member_visibility: this.serverSettings.member_visibility || 'online',
     cleanup_enabled: this.serverSettings.cleanup_enabled || 'false',
     cleanup_max_age_days: this.serverSettings.cleanup_max_age_days || '0',
     cleanup_max_size_mb: this.serverSettings.cleanup_max_size_mb || '0',
-    forum_closed_delete_days: this.serverSettings.forum_closed_delete_days || '0',
     whitelist_enabled: this.serverSettings.whitelist_enabled || 'false',
     max_upload_mb: this.serverSettings.max_upload_mb || '25',
-    max_sound_kb: this.serverSettings.max_sound_kb || '1024',
-    max_emoji_kb: this.serverSettings.max_emoji_kb || '256',
-    max_proxy_avatar_kb: this.serverSettings.max_proxy_avatar_kb || '256',
-    max_poll_options: this.serverSettings.max_poll_options || '10',
-    default_theme: this.serverSettings.default_theme || '',
-    subserver_name: this._getCurrentServerMeta?.()?.name || '',
-    subserver_theme_override: !!this._getCurrentServerMeta?.()?.theme_force_override,
-    subserver_home_channel_id: String(this._getCurrentServerMeta?.()?.home_channel_id || '')
+    update_banner_admin_only: this.serverSettings.update_banner_admin_only || 'false',
+    default_theme: this.serverSettings.default_theme || ''
   };
   // Load webhooks list for admin preview
   if (this.user?.isAdmin) {
@@ -465,7 +372,7 @@ _snapshotAdminSettings() {
 },
 
 _saveAdminSettings() {
-  if (!this.user?.isAdmin && !this._hasPerm('manage_server')) {
+  if (!this.user?.isAdmin) {
     document.getElementById('settings-modal').style.display = 'none';
     return;
   }
@@ -475,18 +382,6 @@ _saveAdminSettings() {
   const name = document.getElementById('server-name-input')?.value.trim() || 'HAVEN';
   if (name !== snap.server_name) {
     this.socket.emit('update-server-setting', { key: 'server_name', value: name });
-    changed = true;
-  }
-
-  const title = document.getElementById('server-title-input')?.value.trim() || '';
-  if (title !== (snap.server_title || '')) {
-    this.socket.emit('update-server-setting', { key: 'server_title', value: title });
-    changed = true;
-  }
-
-  const displayVersion = document.getElementById('server-version-input')?.value.trim() || '2.0';
-  if (displayVersion !== (snap.display_version || '2.0')) {
-    this.socket.emit('update-server-setting', { key: 'display_version', value: displayVersion });
     changed = true;
   }
 
@@ -513,11 +408,7 @@ _saveAdminSettings() {
     this.socket.emit('update-server-setting', { key: 'cleanup_max_size_mb', value: cleanSize });
     changed = true;
   }
-  const forumClosedDelete = String(Math.max(0, Math.min(3650, parseInt(document.getElementById('forum-closed-delete-days')?.value) || 0)));
-  if (forumClosedDelete !== (snap.forum_closed_delete_days || '0')) {
-    this.socket.emit('update-server-setting', { key: 'forum_closed_delete_days', value: forumClosedDelete });
-    changed = true;
-  }
+
   const wlEnabled = document.getElementById('whitelist-enabled')?.checked ? 'true' : 'false';
   if (wlEnabled !== snap.whitelist_enabled) {
     this.socket.emit('whitelist-toggle', { enabled: wlEnabled === 'true' });
@@ -531,52 +422,15 @@ _saveAdminSettings() {
     changed = true;
   }
 
-  const maxSoundKb = String(Math.max(256, Math.min(10240, parseInt(document.getElementById('max-sound-kb')?.value) || 1024)));
-  if (maxSoundKb !== (snap.max_sound_kb || '1024')) {
-    this.socket.emit('update-server-setting', { key: 'max_sound_kb', value: maxSoundKb });
-    changed = true;
-  }
-
-  const maxEmojiKb = String(Math.max(64, Math.min(1024, parseInt(document.getElementById('max-emoji-kb')?.value) || 256)));
-  if (maxEmojiKb !== (snap.max_emoji_kb || '256')) {
-    this.socket.emit('update-server-setting', { key: 'max_emoji_kb', value: maxEmojiKb });
-    changed = true;
-  }
-
-  const maxProxyAvatarKb = String(Math.max(32, Math.min(2048, parseInt(document.getElementById('max-proxy-avatar-kb')?.value) || 256)));
-  if (maxProxyAvatarKb !== (snap.max_proxy_avatar_kb || '256')) {
-    this.socket.emit('update-server-setting', { key: 'max_proxy_avatar_kb', value: maxProxyAvatarKb });
-    changed = true;
-  }
-
-  const maxPollOpts = String(Math.max(2, Math.min(25, parseInt(document.getElementById('max-poll-options')?.value) || 10)));
-  if (maxPollOpts !== (snap.max_poll_options || '10')) {
-    this.socket.emit('update-server-setting', { key: 'max_poll_options', value: maxPollOpts });
+  const updateBannerAdminOnly = document.getElementById('update-banner-admin-only')?.checked ? 'true' : 'false';
+  if (updateBannerAdminOnly !== (snap.update_banner_admin_only || 'false')) {
+    this.socket.emit('update-server-setting', { key: 'update_banner_admin_only', value: updateBannerAdminOnly });
     changed = true;
   }
 
   const defaultTheme = document.getElementById('default-theme-select')?.value || '';
   if (defaultTheme !== (snap.default_theme || '')) {
     this.socket.emit('update-server-setting', { key: 'default_theme', value: defaultTheme });
-    changed = true;
-  }
-
-  const selectedServer = this._getCurrentServerMeta?.();
-  const subserverName = document.getElementById('subserver-name-input')?.value.trim() || '';
-  const subserverTheme = document.getElementById('subserver-theme-select')?.value || '';
-  const subserverThemeOverride = !!document.getElementById('subserver-theme-override')?.checked;
-  const subserverHomeChannel = document.getElementById('subserver-home-channel')?.value || '';
-  if (selectedServer?.id && ((subserverName && subserverName !== (snap.subserver_name || '')) || subserverTheme !== (selectedServer.theme || '') || subserverThemeOverride !== !!snap.subserver_theme_override || String(selectedServer.home_channel_id || '') !== subserverHomeChannel)) {
-    this.socket.emit('update-subserver', {
-      serverId: selectedServer.id,
-      name: subserverName,
-      iconUrl: selectedServer.icon_url || '',
-      theme: subserverTheme,
-      themeForceOverride: subserverThemeOverride,
-      homeChannelId: subserverHomeChannel ? parseInt(subserverHomeChannel, 10) : null
-    }, (res) => {
-      if (!res?.error) this.socket.emit('get-servers');
-    });
     changed = true;
   }
 
@@ -593,10 +447,6 @@ _cancelAdminSettings() {
   if (snap) {
     const ni = document.getElementById('server-name-input');
     if (ni) ni.value = snap.server_name;
-    const ti = document.getElementById('server-title-input');
-    if (ti) ti.value = snap.server_title || '';
-    const vi = document.getElementById('server-version-input');
-    if (vi) vi.value = snap.display_version || '2.0';
     const vis = document.getElementById('member-visibility-select');
     if (vis) vis.value = snap.member_visibility;
     const ce = document.getElementById('cleanup-enabled');
@@ -605,28 +455,14 @@ _cancelAdminSettings() {
     if (ca) ca.value = snap.cleanup_max_age_days;
     const cs = document.getElementById('cleanup-max-size');
     if (cs) cs.value = snap.cleanup_max_size_mb;
-    const fcd = document.getElementById('forum-closed-delete-days');
-    if (fcd) fcd.value = snap.forum_closed_delete_days || '0';
     const wl = document.getElementById('whitelist-enabled');
     if (wl) wl.checked = snap.whitelist_enabled === 'true';
     const mu = document.getElementById('max-upload-mb');
     if (mu) mu.value = snap.max_upload_mb || '25';
-    const msk = document.getElementById('max-sound-kb');
-    if (msk) msk.value = snap.max_sound_kb || '1024';
-    const mek = document.getElementById('max-emoji-kb');
-    if (mek) mek.value = snap.max_emoji_kb || '256';
-    const mpak = document.getElementById('max-proxy-avatar-kb');
-    if (mpak) mpak.value = snap.max_proxy_avatar_kb || '256';
-    const mpo = document.getElementById('max-poll-options');
-    if (mpo) mpo.value = snap.max_poll_options || '10';
+    const uba = document.getElementById('update-banner-admin-only');
+    if (uba) uba.checked = snap.update_banner_admin_only === 'true';
     const dt = document.getElementById('default-theme-select');
     if (dt) dt.value = snap.default_theme || '';
-    const ssn = document.getElementById('subserver-name-input');
-    if (ssn) ssn.value = snap.subserver_name || '';
-    const sto = document.getElementById('subserver-theme-override');
-    if (sto) sto.checked = !!snap.subserver_theme_override;
-    const shc = document.getElementById('subserver-home-channel');
-    if (shc) shc.value = snap.subserver_home_channel_id || '';
   }
   document.getElementById('settings-modal').style.display = 'none';
 },
@@ -654,10 +490,8 @@ _renderWhitelist(list) {
 /* ── Server Branding (icon + name) ──────────────────── */
 
 _applyServerBranding() {
-  const selectedServer = this._getCurrentServerMeta?.();
-  const isMain = !selectedServer || selectedServer.is_legacy_main || selectedServer.name === 'Main';
-  const name = isMain ? (this.serverSettings.server_name || 'HAVEN') : (selectedServer.name || 'Server');
-  const icon = isMain ? (this.serverSettings.server_icon || '') : (selectedServer.icon_url || '');
+  const name = this.serverSettings.server_name || 'HAVEN';
+  const icon = this.serverSettings.server_icon || '';
 
   // Sidebar brand text
   const brandText = document.querySelector('.brand-text');
@@ -681,6 +515,29 @@ _applyServerBranding() {
       const brandIcon = document.querySelector('.brand-icon');
       if (brandIcon) brandIcon.style.display = 'none';
     }
+  }
+
+  // Server bar icon
+  const homeServer = document.getElementById('home-server');
+  if (homeServer) {
+    const existingImg = homeServer.querySelector('img');
+    const iconText = homeServer.querySelector('.server-icon-text');
+    if (icon) {
+      if (iconText) iconText.style.display = 'none';
+      if (!existingImg) {
+        const img = document.createElement('img');
+        img.src = icon;
+        img.alt = name;
+        homeServer.insertBefore(img, homeServer.firstChild);
+      } else {
+        existingImg.src = icon;
+        existingImg.style.display = '';
+      }
+    } else {
+      if (existingImg) existingImg.style.display = 'none';
+      if (iconText) iconText.style.display = '';
+    }
+    homeServer.title = name;
   }
 
   // Admin preview
@@ -760,24 +617,6 @@ _renderBanList(bans) {
       }
     });
   });
-},
-
-_renderDeletedUsersList(entries) {
-  const list = document.getElementById('deleted-users-list');
-  if (!entries || entries.length === 0) {
-    list.innerHTML = '<p class="muted-text">No deleted users</p>';
-    return;
-  }
-  list.innerHTML = entries.map(e => `
-    <div class="ban-item">
-      <div class="ban-info">
-        <strong>${this._escapeHtml(e.display_name || e.username)}</strong>
-        ${e.display_name ? `<span class="ban-reason">@${this._escapeHtml(e.username)}</span>` : ''}
-        <span class="ban-reason">${e.reason ? this._escapeHtml(e.reason) : 'No reason'}</span>
-        <span class="ban-date">${new Date(e.deleted_at).toLocaleDateString()}${e.deleted_by_name ? ` by ${this._escapeHtml(e.deleted_by_name)}` : ''}</span>
-      </div>
-    </div>
-  `).join('');
 },
 
 // ═══════════════════════════════════════════════════════
@@ -876,7 +715,7 @@ _renderAllMembers(members) {
         btns += `<button class="aml-action-btn aml-btn-remch" data-uid="${m.id}" data-uname="${this._escapeHtml(m.username)}" title="Remove from Channel">➖</button>`;
       }
       if (perms.canBan && !m.banned) {
-        btns += `<button class="aml-action-btn aml-btn-ban" data-uid="${m.id}" data-uname="${this._escapeHtml(m.username)}" title="Admin Ban">⛔</button>`;
+        btns += `<button class="aml-action-btn aml-btn-ban" data-uid="${m.id}" data-uname="${this._escapeHtml(m.username)}" title="Ban from Server">⛔</button>`;
       }
       if (perms.isAdmin && m.banned) {
         btns += `<button class="aml-action-btn aml-btn-unban" data-uid="${m.id}" data-uname="${this._escapeHtml(m.username)}" title="Unban">✅</button>`;
@@ -973,7 +812,7 @@ _bindMemberListActions(container) {
       e.stopPropagation();
       const uid = parseInt(btn.dataset.uid);
       const uname = btn.dataset.uname;
-      self._showAdminActionModal('admin-ban', uid, uname);
+      self._showAdminActionModal('ban', uid, uname);
     });
   });
 
@@ -1676,6 +1515,46 @@ _setupResizableSidebars() {
     });
   }
 
+  // Sidebar split handle (channels/DM divider)
+  const splitHandle = document.getElementById('sidebar-split-handle');
+  const splitContainer = document.getElementById('sidebar-split');
+  const channelsPane = document.getElementById('channels-pane');
+  const dmPane = document.getElementById('dm-pane');
+  if (splitHandle && splitContainer && channelsPane && dmPane) {
+    const savedRatio = localStorage.getItem('haven_sidebar_split_ratio');
+    if (savedRatio) {
+      channelsPane.style.flex = `${savedRatio} 1 0`;
+      dmPane.style.flex = `${1 - parseFloat(savedRatio)} 1 0`;
+    }
+
+    let dragging = false;
+    splitHandle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      splitHandle.classList.add('dragging');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = splitContainer.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const total = rect.height;
+      let ratio = y / total;
+      ratio = Math.max(0.05, Math.min(0.95, ratio));
+      channelsPane.style.flex = `${ratio} 1 0`;
+      dmPane.style.flex = `${1 - ratio} 1 0`;
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      splitHandle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      const chFlex = parseFloat(channelsPane.style.flex) || 0.6;
+      localStorage.setItem('haven_sidebar_split_ratio', chFlex);
+    });
+  }
 },
 
 // ═══════════════════════════════════════════════════════
@@ -2296,15 +2175,8 @@ _initRoleManagement() {
     const userId = document.getElementById('assign-role-modal').dataset.userId;
     const scope = document.getElementById('assign-role-scope').value;
     if (!roleId || !userId) return;
-    const selectedServer = this._getCurrentServerMeta?.();
-    const channelId = scope.startsWith('channel:') ? parseInt(scope.slice(8), 10) : null;
-    const serverId = scope === 'subserver' ? selectedServer?.id || null : null;
-    this.socket.emit('assign-role', {
-      userId: parseInt(userId, 10),
-      roleId: parseInt(roleId, 10),
-      channelId,
-      serverId
-    }, (res) => {
+    const channelId = scope !== 'server' ? parseInt(scope, 10) : null;
+    this.socket.emit('assign-role', { userId: parseInt(userId, 10), roleId: parseInt(roleId, 10), channelId }, (res) => {
       if (res.error) { this._showToast(res.error, 'error'); return; }
       this._showToast('Role assigned', 'success');
       document.getElementById('assign-role-modal').style.display = 'none';
@@ -2313,17 +2185,6 @@ _initRoleManagement() {
 
   // Listen for role updates
   this.socket.on('roles-updated', () => this._loadRoles());
-
-  // Reset roles to default
-  document.getElementById('reset-roles-btn')?.addEventListener('click', () => {
-    if (!confirm('Reset all roles to deployment defaults?\n\nThis will delete all current roles and re-create the defaults (Server Mod, Channel Mod, User). Existing role assignments will be lost.')) return;
-    this.socket.emit('reset-roles-to-default', {}, (res) => {
-      if (res.error) { this._showToast(res.error, 'error'); return; }
-      this._showToast('Roles reset to defaults', 'success');
-      this._selectedRoleId = null;
-      this._loadRoles();
-    });
-  });
 
   // Initialize centralized role assignment 3-pane modal
   this._initRoleAssignCenter();
@@ -2393,8 +2254,29 @@ _renderRoleDetail() {
     return;
   }
 
-  const allPerms = ALL_PERMS;
-  const permLabels = PERM_LABELS;
+  const allPerms = [
+    'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
+    'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
+    'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
+    'create_channel', 'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+    'view_all_members', 'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
+  ];
+  const permLabels = {
+    edit_own_messages: 'Edit Own Messages', delete_own_messages: 'Delete Own Messages',
+    delete_message: 'Delete Any Message', delete_lower_messages: 'Delete Lower-level Messages',
+    pin_message: 'Pin Messages', archive_messages: 'Protect Messages',
+    kick_user: 'Kick Users', mute_user: 'Mute Users', ban_user: 'Ban Users',
+    rename_channel: 'Rename Channels', rename_sub_channel: 'Rename Sub-channels',
+    set_channel_topic: 'Set Channel Topic', manage_sub_channels: 'Manage Sub-channels',
+    create_channel: 'Create Channels',
+    upload_files: 'Upload Files', use_voice: 'Use Voice Chat',
+    manage_webhooks: 'Manage Webhooks', mention_everyone: 'Mention @everyone',
+    view_history: 'View Message History',
+    view_all_members: 'View All Server Members',
+    manage_emojis: 'Manage Custom Emojis',
+    manage_soundboard: 'Manage Soundboard',
+    promote_user: 'Promote Users', transfer_admin: 'Transfer Admin'
+  };
   const rolePerms = role.permissions || [];
 
   panel.innerHTML = `
@@ -2650,7 +2532,7 @@ _renderChannelRolesMembers() {
     const badges = m.isAdmin
       ? '<span class="channel-roles-badge badge-admin"><span class="badge-dot" style="background:#e74c3c"></span>Admin</span>'
       : (m.roles || []).map(r =>
-          `<span class="channel-roles-badge"><span class="badge-dot" style="background:${this._safeColor(r.color, '#aaa')}"></span>${this._escapeHtml(r.name)}<span class="badge-scope">${r.scope === 'channel' ? '📌 Channel' : (r.scope === 'subserver' ? '🗂️ Server' : '🌐 Big Server')}</span><span class="revoke-btn" data-uid="${m.id}" data-rid="${r.roleId}" data-scope="${r.scope}" title="Revoke">✕</span></span>`
+          `<span class="channel-roles-badge"><span class="badge-dot" style="background:${this._safeColor(r.color, '#aaa')}"></span>${this._escapeHtml(r.name)}<span class="badge-scope">${r.scope === 'channel' ? '📌 Channel' : '🌐 Server'}</span><span class="revoke-btn" data-uid="${m.id}" data-rid="${r.roleId}" data-scope="${r.scope}" title="Revoke">✕</span></span>`
         ).join('') || '<span class="channel-roles-no-role">No roles</span>';
 
     return `<div class="channel-roles-member${sel}" data-uid="${m.id}">
@@ -2682,8 +2564,7 @@ _renderChannelRolesMembers() {
       const rid = parseInt(btn.dataset.rid);
       const scope = btn.dataset.scope;
       const channelId = scope === 'channel' ? this._channelRolesChannelId : null;
-      const serverId = scope === 'subserver' ? this.currentServerId : null;
-      this.socket.emit('revoke-role', { userId: uid, roleId: rid, channelId, serverId });
+      this.socket.emit('revoke-role', { userId: uid, roleId: rid, channelId });
       this._showToast('Role revoked', 'success');
       // Refresh after a short delay
       setTimeout(() => this._refreshChannelRoles(), 400);
@@ -2715,7 +2596,7 @@ _showChannelRolesActions(userId) {
     currentDiv.innerHTML = '<span class="channel-roles-badge badge-admin"><span class="badge-dot" style="background:#e74c3c"></span>Admin</span>';
   } else if (member.roles.length) {
     currentDiv.innerHTML = member.roles.map(r =>
-      `<span class="channel-roles-badge"><span class="badge-dot" style="background:${this._safeColor(r.color, '#aaa')}"></span>${this._escapeHtml(r.name)} <span class="badge-scope">${r.scope === 'channel' ? '📌 Channel' : (r.scope === 'subserver' ? '🗂️ Server' : '🌐 Big Server')}</span></span>`
+      `<span class="channel-roles-badge"><span class="badge-dot" style="background:${this._safeColor(r.color, '#aaa')}"></span>${this._escapeHtml(r.name)} <span class="badge-scope">${r.scope === 'channel' ? '📌 Channel' : '🌐 Server'}</span></span>`
     ).join('');
   } else {
     currentDiv.innerHTML = '<span style="font-size:0.78rem;color:var(--text-muted)">No roles assigned</span>';
@@ -2731,9 +2612,8 @@ _assignChannelRole() {
 
   const scopeVal = document.getElementById('channel-roles-scope-select').value;
   const channelId = scopeVal === 'channel' ? this._channelRolesChannelId : null;
-  const serverId = scopeVal === 'subserver' ? this.currentServerId : null;
 
-  this.socket.emit('assign-role', { userId, roleId, channelId, serverId }, (res) => {
+  this.socket.emit('assign-role', { userId, roleId, channelId }, (res) => {
     if (res.error) return this._showToast(res.error, 'error');
     this._showToast('Role assigned', 'success');
     // Reset selection
@@ -2789,8 +2669,29 @@ _renderChannelRolesRoleDetail() {
     return;
   }
 
-  const allPerms = ALL_PERMS;
-  const permLabels = PERM_LABELS;
+  const allPerms = [
+    'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
+    'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
+    'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
+    'create_channel', 'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+    'view_all_members', 'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
+  ];
+  const permLabels = {
+    edit_own_messages: 'Edit Own Messages', delete_own_messages: 'Delete Own Messages',
+    delete_message: 'Delete Any Message', delete_lower_messages: 'Delete Lower-level Messages',
+    pin_message: 'Pin Messages', archive_messages: 'Protect Messages',
+    kick_user: 'Kick Users', mute_user: 'Mute Users', ban_user: 'Ban Users',
+    rename_channel: 'Rename Channels', rename_sub_channel: 'Rename Sub-channels',
+    set_channel_topic: 'Set Channel Topic', manage_sub_channels: 'Manage Sub-channels',
+    create_channel: 'Create Channels',
+    upload_files: 'Upload Files', use_voice: 'Use Voice Chat',
+    manage_webhooks: 'Manage Webhooks', mention_everyone: 'Mention @everyone',
+    view_history: 'View Message History',
+    view_all_members: 'View All Server Members',
+    manage_emojis: 'Manage Custom Emojis',
+    manage_soundboard: 'Manage Soundboard',
+    promote_user: 'Promote Users', transfer_admin: 'Transfer Admin'
+  };
   const rolePerms = role.permissions || [];
 
   panel.innerHTML = `
@@ -2907,7 +2808,7 @@ _openAssignRoleModal(userId, username) {
 
   // Populate scope with structured parent → sub-channel grouping
   const scopeSel = document.getElementById('assign-role-scope');
-  const nonDm = this.channels.filter(c => !c.is_dm && (!this.currentServerId || c.server_id === this.currentServerId));
+  const nonDm = this.channels.filter(c => !c.is_dm);
   const parents = nonDm.filter(c => !c.parent_channel_id);
   const subMap = {};
   nonDm.filter(c => c.parent_channel_id).forEach(c => {
@@ -2915,16 +2816,12 @@ _openAssignRoleModal(userId, username) {
     subMap[c.parent_channel_id].push(c);
   });
 
-  let scopeHtml = '<option value="instance">🌐 Big Server-wide</option>';
-  if (this.currentServerId) {
-    const currentServer = (this.servers || []).find(s => s.id === this.currentServerId);
-    scopeHtml += `<option value="subserver">🗂️ ${this._escapeHtml(currentServer?.name || 'This Server')}</option>`;
-  }
+  let scopeHtml = '<option value="server">🌐 Server-wide</option>';
   parents.forEach(p => {
-    scopeHtml += `<option value="channel:${p.id}"># ${this._escapeHtml(p.name)}</option>`;
+    scopeHtml += `<option value="${p.id}"># ${this._escapeHtml(p.name)}</option>`;
     const subs = subMap[p.id] || [];
     subs.forEach(s => {
-      scopeHtml += `<option value="channel:${s.id}">&nbsp;&nbsp;└ ${this._escapeHtml(s.name)}</option>`;
+      scopeHtml += `<option value="${s.id}">&nbsp;&nbsp;└ ${this._escapeHtml(s.name)}</option>`;
     });
   });
   scopeSel.innerHTML = scopeHtml;
@@ -2954,7 +2851,7 @@ _openRoleAssignCenter(preSelectUserId = null) {
 
   // Show admin-only buttons
   const manageBtn = document.getElementById('rac-manage-roles-btn');
-  if (manageBtn) manageBtn.style.display = (this.user.isAdmin || this._hasPerm('manage_roles')) ? '' : 'none';
+  if (manageBtn) manageBtn.style.display = this.user.isAdmin ? '' : 'none';
 
   this.socket.emit('get-role-assignment-data', {}, (res) => {
     if (res.error) { this._showToast(res.error, 'error'); return; }
@@ -2990,7 +2887,7 @@ _renderRacUsers(filter = '') {
       : initial;
     const activeClass = this._racSelectedUser === u.id ? ' active' : '';
     const roleNames = u.currentRoles
-      .filter(r => !r.channel_id && !r.server_id) // big-server-wide only for summary
+      .filter(r => !r.channel_id) // server-wide only for summary
       .map(r => r.name).join(', ') || 'No role';
     return `<div class="rac-user-item${activeClass}" data-uid="${u.id}">
       <div class="rac-user-avatar" style="background-color:${color};${shapeStyle}">${avatarInner}</div>
@@ -3028,44 +2925,27 @@ _renderRacChannels() {
 
   // Get current role per scope for this user
   const getRoleName = (channelId) => {
-    const scopeKey = channelId === null ? 'instance' : (typeof channelId === 'string' ? channelId : `channel:${channelId}`);
-    const key = `${userId}:${scopeKey}`;
+    const key = `${userId}:${channelId || 'server'}`;
     if (this._racPendingChanges[key]) {
       const pc = this._racPendingChanges[key];
       if (pc.action === 'revoke') return 'None ✎';
       const pendingRole = this._racData.roles.find(r => r.id === pc.roleId);
       return pendingRole ? `${pendingRole.name} ✎` : '';
     }
-    const match = user.currentRoles.filter(r => {
-      if (channelId === null) return !r.channel_id && !r.server_id;
-      if (typeof channelId === 'string' && channelId.startsWith('server:')) return !r.channel_id && r.server_id === parseInt(channelId.slice(7), 10);
-      return r.channel_id === channelId;
-    });
+    const match = user.currentRoles.filter(r => channelId ? r.channel_id === channelId : !r.channel_id);
     return match.map(r => r.name).join(', ') || '';
   };
 
   let html = '';
 
-  // Big-server-wide option
+  // Admin: server-wide option
   if (this._racData.callerIsAdmin) {
-    const serverActive = this._racSelectedChannel === 'instance' ? ' active' : '';
+    const serverActive = this._racSelectedChannel === 'server' ? ' active' : '';
     const serverRole = getRoleName(null);
-    html += `<div class="rac-channel-item rac-server-wide${serverActive}" data-channel="instance">
+    html += `<div class="rac-channel-item rac-server-wide${serverActive}" data-channel="server">
       <span class="rac-channel-icon">🌐</span>
-      <span>Big Server-wide</span>
+      <span>Server-wide</span>
       ${serverRole ? `<span class="rac-channel-current-role">${this._escapeHtml(serverRole)}</span>` : ''}
-    </div>`;
-  }
-
-  if (this.currentServerId) {
-    const currentServer = (this.servers || []).find(s => s.id === this.currentServerId);
-    const currentServerKey = `server:${this.currentServerId}`;
-    const subserverActive = this._racSelectedChannel === currentServerKey ? ' active' : '';
-    const subserverRole = getRoleName(currentServerKey);
-    html += `<div class="rac-channel-item${subserverActive}" data-channel="${currentServerKey}">
-      <span class="rac-channel-icon">🗂️</span>
-      <span>${this._escapeHtml(currentServer?.name || 'This Server')}</span>
-      ${subserverRole ? `<span class="rac-channel-current-role">${this._escapeHtml(subserverRole)}</span>` : ''}
     </div>`;
   }
 
@@ -3109,15 +2989,15 @@ _renderRacChannels() {
     el.addEventListener('click', () => {
       const ch = el.dataset.channel;
       const prevChannel = this._racSelectedChannel;
-      this._racSelectedChannel = ch === 'instance' || ch.startsWith('server:') ? ch : parseInt(ch, 10);
+      this._racSelectedChannel = ch === 'server' ? 'server' : parseInt(ch);
 
       // Carry forward pending modifications to the new channel so the user
       // doesn't have to re-configure the same role/permissions from scratch
       if (this._racSelectedUser && prevChannel != null && prevChannel !== this._racSelectedChannel) {
-        const prevScope = prevChannel === 'instance' ? 'instance' : (typeof prevChannel === 'string' ? prevChannel : `channel:${prevChannel}`);
-        const newScope  = this._racSelectedChannel === 'instance' ? 'instance' : (typeof this._racSelectedChannel === 'string' ? this._racSelectedChannel : `channel:${this._racSelectedChannel}`);
-        const prevKey  = `${this._racSelectedUser}:${prevScope}`;
-        const newKey   = `${this._racSelectedUser}:${newScope}`;
+        const prevChId = prevChannel === 'server' ? null : prevChannel;
+        const newChId  = this._racSelectedChannel === 'server' ? null : this._racSelectedChannel;
+        const prevKey  = `${this._racSelectedUser}:${prevChId || 'server'}`;
+        const newKey   = `${this._racSelectedUser}:${newChId || 'server'}`;
         const prevPending = this._racPendingChanges[prevKey];
         if (prevPending && !this._racPendingChanges[newKey]) {
           // Clone the previous config as a starting point for the new channel
@@ -3146,18 +3026,12 @@ _renderRacConfig() {
   const user = this._racData.users.find(u => u.id === userId);
   if (!user) return;
 
-  const channelId = typeof this._racSelectedChannel === 'number' ? this._racSelectedChannel : null;
-  const serverId = typeof this._racSelectedChannel === 'string' && this._racSelectedChannel.startsWith('server:')
-    ? parseInt(this._racSelectedChannel.slice(7), 10)
-    : null;
-  const scopeKey = this._racSelectedChannel === 'instance'
-    ? 'instance'
-    : (serverId ? `server:${serverId}` : `channel:${channelId}`);
-  const key = `${userId}:${scopeKey}`;
+  const channelId = this._racSelectedChannel === 'server' ? null : this._racSelectedChannel;
+  const key = `${userId}:${channelId || 'server'}`;
 
   // Current assignment (from server data)
   const currentRoles = user.currentRoles.filter(r =>
-    channelId ? r.channel_id === channelId : (serverId ? (!r.channel_id && r.server_id === serverId) : (!r.channel_id && !r.server_id))
+    channelId ? r.channel_id === channelId : !r.channel_id
   );
   const currentRole = currentRoles.length > 0 ? currentRoles[0] : null;
 
@@ -3193,11 +3067,32 @@ _renderRacConfig() {
   // Determine which permissions the caller can grant
   const callerPerms = this._racData.callerPerms || [];
   const callerIsAdmin = this._racData.callerIsAdmin;
-  const allPerms = ALL_PERMS;
+  const allPerms = [
+    'edit_own_messages', 'delete_own_messages', 'delete_message', 'delete_lower_messages',
+    'pin_message', 'archive_messages', 'kick_user', 'mute_user', 'ban_user',
+    'rename_channel', 'rename_sub_channel', 'set_channel_topic', 'manage_sub_channels',
+    'create_channel', 'upload_files', 'use_voice', 'manage_webhooks', 'mention_everyone', 'view_history',
+    'view_all_members', 'manage_emojis', 'manage_soundboard', 'promote_user', 'transfer_admin'
+  ];
   // Perms that only admin can grant
-  const adminOnlyPerms = ['transfer_admin', 'manage_roles', 'manage_server', 'create_server', 'delete_channel'];
+  const adminOnlyPerms = ['transfer_admin'];
   // Perms that require the caller to have them to be able to grant
-  const permLabels = PERM_LABELS;
+  const permLabels = {
+    edit_own_messages: 'Edit Own Messages', delete_own_messages: 'Delete Own Messages',
+    delete_message: 'Delete Any Message', delete_lower_messages: 'Delete Lower Messages',
+    pin_message: 'Pin Messages', archive_messages: 'Protect Messages',
+    kick_user: 'Kick Users', mute_user: 'Mute Users',
+    ban_user: 'Ban Users', rename_channel: 'Rename Channels',
+    rename_sub_channel: 'Rename Sub-channels', set_channel_topic: 'Set Topic',
+    manage_sub_channels: 'Manage Sub-channels', create_channel: 'Create Channels',
+    upload_files: 'Upload Files',
+    use_voice: 'Use Voice', manage_webhooks: 'Manage Webhooks',
+    mention_everyone: 'Mention Everyone', view_history: 'View History',
+    view_all_members: 'View All Members',
+    manage_emojis: 'Manage Custom Emojis',
+    manage_soundboard: 'Manage Soundboard',
+    promote_user: 'Promote Users', transfer_admin: 'Transfer Admin'
+  };
 
   // If a role preset is selected, get its permissions
   const selectedRoleObj = availableRoles.find(r => r.id === Number(selectedRoleId));
@@ -3367,14 +3262,8 @@ _renderRacConfig() {
 
 _racUpdatePending(forceRoleId) {
   const userId = this._racSelectedUser;
-  const channelId = typeof this._racSelectedChannel === 'number' ? this._racSelectedChannel : null;
-  const serverId = typeof this._racSelectedChannel === 'string' && this._racSelectedChannel.startsWith('server:')
-    ? parseInt(this._racSelectedChannel.slice(7), 10)
-    : null;
-  const scopeKey = this._racSelectedChannel === 'instance'
-    ? 'instance'
-    : (serverId ? `server:${serverId}` : `channel:${channelId}`);
-  const key = `${userId}:${scopeKey}`;
+  const channelId = this._racSelectedChannel === 'server' ? null : this._racSelectedChannel;
+  const key = `${userId}:${channelId || 'server'}`;
 
   const roleId = forceRoleId !== undefined
     ? forceRoleId
@@ -3384,7 +3273,7 @@ _racUpdatePending(forceRoleId) {
     // Check if user currently HAS a role at this scope — if so, queue a revocation
     const user = this._racData.users.find(u => u.id === userId);
     const currentRoles = user ? user.currentRoles.filter(r =>
-      channelId ? r.channel_id === channelId : (serverId ? (!r.channel_id && r.server_id === serverId) : (!r.channel_id && !r.server_id))
+      channelId ? r.channel_id === channelId : !r.channel_id
     ) : [];
     if (currentRoles.length > 0) {
       this._racPendingChanges[key] = {
@@ -3421,13 +3310,12 @@ _racSaveChanges() {
   for (const [key, val] of changes) {
     expandedChanges.push([key, val]);
     if (val.applyToSubs && val.action === 'assign') {
-      const userIdStr = key.split(':', 1)[0];
-      const normalizedScope = key.slice(String(userIdStr).length + 1);
-      const channelId = normalizedScope.startsWith('channel:') ? parseInt(normalizedScope.slice(8), 10) : null;
+      const [userIdStr, scope] = key.split(':');
+      const channelId = scope === 'server' ? null : parseInt(scope);
       if (channelId && this._racData) {
         const subs = this._racData.channels.filter(c => c.parentId === channelId);
         for (const sub of subs) {
-          const subKey = `${userIdStr}:channel:${sub.id}`;
+          const subKey = `${userIdStr}:${sub.id}`;
           if (!this._racPendingChanges[subKey]) {
             expandedChanges.push([subKey, { ...val, applyToSubs: false }]);
           }
@@ -3461,11 +3349,9 @@ _racSaveChanges() {
   };
 
   expandedChanges.forEach(([key, val]) => {
-    const userIdStr = key.split(':', 1)[0];
+    const [userIdStr, scope] = key.split(':');
     const userId = parseInt(userIdStr);
-    const normalizedScope = key.slice(String(userId).length + 1);
-    const emitChannelId = normalizedScope.startsWith('channel:') ? parseInt(normalizedScope.slice(8), 10) : null;
-    const emitServerId = normalizedScope.startsWith('server:') ? parseInt(normalizedScope.slice(7), 10) : null;
+    const channelId = scope === 'server' ? null : parseInt(scope);
 
     if (val.action === 'revoke') {
       // Revoke each role the user currently has at this scope
@@ -3473,7 +3359,7 @@ _racSaveChanges() {
       if (toRevoke.length === 0) { completed++; if (completed === total) onDone(); return; }
       let revokeCount = 0;
       toRevoke.forEach(roleId => {
-        this.socket.emit('revoke-role', { userId, roleId, channelId: emitChannelId, serverId: emitServerId }, (res) => {
+        this.socket.emit('revoke-role', { userId, roleId, channelId }, (res) => {
           revokeCount++;
           if (res && res.error) errors.push(res.error);
           if (revokeCount === toRevoke.length) {
@@ -3486,8 +3372,7 @@ _racSaveChanges() {
       this.socket.emit('assign-role', {
         userId,
         roleId: val.roleId,
-        channelId: emitChannelId,
-        serverId: emitServerId,
+        channelId,
         customLevel: val.level,
         customPerms: val.customPerms || null
       }, (res) => {
@@ -3559,125 +3444,6 @@ _initDonorsModal() {
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.style.display = 'none';
   });
-},
-
-_setupStorageAdmin() {
-  const providerSelect = document.getElementById('storage-provider-select');
-  if (!providerSelect) return;
-  providerSelect.addEventListener('change', () => this._renderStorageAdminState());
-  document.getElementById('storage-save-btn')?.addEventListener('click', () => this._saveStorageConfiguration());
-  document.getElementById('storage-test-btn')?.addEventListener('click', () => this._testStorageConnection());
-  document.getElementById('storage-migrate-btn')?.addEventListener('click', () => this._migrateStorageUploads());
-  document.getElementById('storage-disconnect-btn')?.addEventListener('click', () => this._disconnectStorage());
-  this._loadStorageStatus();
-},
-
-async _loadStorageStatus() {
-  try {
-    const res = await fetch('/api/admin/storage/status', { headers: { Authorization: `Bearer ${this.token}` } });
-    if (!res.ok) return;
-    this._storageStatus = await res.json();
-    this._renderStorageAdminState();
-  } catch {}
-},
-
-_renderStorageAdminState() {
-  const status = this._storageStatus || {};
-  const providerSelect = document.getElementById('storage-provider-select');
-  if (!providerSelect) return;
-  const provider = providerSelect.value || status.provider || 'local';
-  const configured = provider === 's3' && !!status.configured;
-  const configuredPanel = document.getElementById('storage-configured-panel');
-  const configuredSummary = document.getElementById('storage-configured-summary');
-  const s3Settings = document.getElementById('storage-s3-settings');
-  const disconnectBtn = document.getElementById('storage-disconnect-btn');
-  const saveBtn = document.getElementById('storage-save-btn');
-  const statusNote = document.getElementById('storage-status-note');
-  const accessKey = document.getElementById('storage-s3-access-key');
-  const secretKey = document.getElementById('storage-s3-secret-key');
-  providerSelect.value = provider;
-  if (provider === 's3') {
-    if (status.endpoint) document.getElementById('storage-s3-endpoint').value = status.endpoint;
-    if (status.bucket) document.getElementById('storage-s3-bucket').value = status.bucket;
-    if (status.region) document.getElementById('storage-s3-region').value = status.region;
-    if (status.prefix !== undefined) document.getElementById('storage-s3-prefix').value = status.prefix || '';
-    document.getElementById('storage-s3-force-path-style').checked = status.forcePathStyle !== false;
-  }
-  if (configuredPanel) configuredPanel.style.display = configured ? 'block' : 'none';
-  if (configuredSummary) configuredSummary.textContent = configured ? `${status.bucket || 'bucket'} via ${status.endpoint || 'S3'}${status.prefix ? ` (${status.prefix})` : ''}` : '';
-  if (s3Settings) s3Settings.style.display = provider === 's3' ? 'block' : 'none';
-  if (disconnectBtn) disconnectBtn.style.display = configured ? '' : 'none';
-  if (saveBtn) saveBtn.textContent = configured ? 'Update S3 Setup' : 'Save S3 Setup';
-  if (accessKey) { accessKey.disabled = configured; accessKey.placeholder = configured ? 'Stored securely' : 'Access key ID'; }
-  if (secretKey) { secretKey.disabled = configured; secretKey.placeholder = configured ? 'Stored securely' : 'Secret access key'; }
-  if (statusNote) statusNote.textContent = status.pendingRestore ? 'A data restore is staged and will apply on restart.' : (configured ? 'S3 is active. You can test it, disconnect it, or migrate local uploads.' : '');
-},
-
-_collectStoragePayload(includeCredentials = true) {
-  const payload = {
-    provider: document.getElementById('storage-provider-select')?.value || 'local',
-    endpoint: document.getElementById('storage-s3-endpoint')?.value.trim() || '',
-    bucket: document.getElementById('storage-s3-bucket')?.value.trim() || '',
-    region: document.getElementById('storage-s3-region')?.value.trim() || 'auto',
-    prefix: document.getElementById('storage-s3-prefix')?.value.trim() || 'haven',
-    forcePathStyle: !!document.getElementById('storage-s3-force-path-style')?.checked
-  };
-  if (includeCredentials) {
-    payload.accessKeyId = document.getElementById('storage-s3-access-key')?.value.trim() || '';
-    payload.secretAccessKey = document.getElementById('storage-s3-secret-key')?.value.trim() || '';
-  }
-  return payload;
-},
-
-async _saveStorageConfiguration() {
-  try {
-    const res = await fetch('/api/admin/storage/configure', { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(this._collectStoragePayload(true)) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to save storage');
-    this._storageStatus = data;
-    this._renderStorageAdminState();
-    this._showToast(data.provider === 's3' ? 'S3 storage saved' : 'Local storage enabled', 'success');
-  } catch (err) {
-    this._showToast(err.message || 'Failed to save storage', 'error');
-  }
-},
-
-async _testStorageConnection() {
-  try {
-    const res = await fetch('/api/admin/storage/test', { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(this._collectStoragePayload(!this._storageStatus?.configured)) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Connection test failed');
-    this._showToast('S3 connection succeeded', 'success');
-  } catch (err) {
-    this._showToast(err.message || 'Connection test failed', 'error');
-  }
-},
-
-async _migrateStorageUploads() {
-  try {
-    const res = await fetch('/api/admin/storage/migrate', { method: 'POST', headers: { Authorization: `Bearer ${this.token}` } });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Migration failed');
-    this._showToast(`Moved ${data.migrated || 0} upload(s)`, 'success');
-  } catch (err) {
-    this._showToast(err.message || 'Migration failed', 'error');
-  }
-},
-
-async _disconnectStorage() {
-  if (!confirm('Disconnect S3 and switch back to local Haven storage?')) return;
-  try {
-    const res = await fetch('/api/admin/storage/disconnect', { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' } });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Disconnect failed');
-    document.getElementById('storage-s3-access-key').value = '';
-    document.getElementById('storage-s3-secret-key').value = '';
-    this._storageStatus = data;
-    this._renderStorageAdminState();
-    this._showToast('S3 disconnected', 'success');
-  } catch (err) {
-    this._showToast(err.message || 'Disconnect failed', 'error');
-  }
 },
 
 // ═══════════════════════════════════════════════════════
